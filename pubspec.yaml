@@ -1,0 +1,41 @@
+name: luxe
+description: Luxe Messenger — мессенджер с чатами, файлами и звонками WebRTC.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.4.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  supabase_flutter: ^2.5.6
+  flutter_webrtc: ^1.6.2
+  image_picker: ^1.0.7
+  file_picker: ^8.0.0+1
+  firebase_core: ^3.8.0
+  firebase_messaging: ^15.1.5
+  flutter_local_notifications: ^18.0.1
+  url_launcher: ^6.2.0
+  uuid: ^4.4.0
+  timeago: ^3.6.1
+  google_fonts: ^6.2.1
+  path_provider: ^2.1.6
+  http: ^1.6.0
+
+# Firebase отключён на Windows: FCM там не поддерживается, а нативный SDK
+# firebase_core для Windows весит ~4 ГБ. Локальная копия без windows/.
+dependency_overrides:
+  firebase_core:
+    path: third_party/firebase_core
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/logo/luxe_logo.png

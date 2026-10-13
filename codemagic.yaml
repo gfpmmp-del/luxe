@@ -1,0 +1,60 @@
+# Сборка iOS без Mac — через Codemagic (бесплатно, 500 минут/мес)
+#
+# Как пользоваться:
+#   1. Залей проект в GitHub/GitLab/Bitbucket
+#   2. Зарегистрируйся на https://codemagic.io
+#   3. Add application → выбери репозиторий
+#   4. Открой Configuration → Flutter build → скопируй этот файл
+#      (или загрузи его как codemagic.yaml в корень проекта)
+#   5. Start new build
+#
+# Результат (артефакт .ipa) скачивается в Codemagic → Artifacts
+#
+# Без Apple Developer Account соберётся ТОЛЬКО debug-версия без подписи.
+# Для установки на свой iPhone используй AltStore или бесплатный
+# provisioning (7 дней, до 3 приложений).
+
+name: luxe_messenger_ios
+type: flutter
+
+workflows:
+  # Сборка без подписи — для установки через AltStore
+  ios-unsigned:
+    name: iOS (unsigned IPA)
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      flutter_channel: stable
+    scripts:
+      - name: Get packages
+        script: flutter pub get
+      - name: Set up signing (auto)
+        script: flutter pub get && flutter build ios --debug --no-codesign
+      - name: Package unsigned IPA
+        script: |
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -R Runner.app Payload/
+          zip -qry luxe_unsigned.ipa Payload
+          echo "IPA готов"
+    artifacts:
+      - build/ios/iphoneos/*.ipa
+
+  # Сборка с подписью — нужен Apple Developer Account ($99/год)
+  # Перед запуском задай переменные:
+  #   APPLE_TEAM_ID, APPLE_SIGNING_IDENTITY, APPLE_TEAM_ISSUER_ID, APPLE_KEY_ID
+  # или подключи Codemagic → Team → App Store Connect → Automatic code signing
+  ios-signed:
+    name: iOS (signed IPA)
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      flutter_channel: stable
+    scripts:
+      - name: Get packages
+        script: flutter pub get
+      - name: Build and sign
+        script: flutter build ipa --release
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - build/ios/ipa/*.dSYM.zip
