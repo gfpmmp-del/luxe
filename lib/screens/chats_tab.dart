@@ -6,6 +6,7 @@ import '../services/chat_service.dart';
 import '../theme/luxe_theme.dart';
 import '../widgets/luxe_widgets.dart';
 import '../widgets/verified_badge.dart';
+import 'new_group_screen.dart';
 
 class _Row {
   final Map<String, dynamic> chat;
@@ -120,6 +121,60 @@ class ChatsTabState extends State<ChatsTab> {
     rows = out;
   }
 
+  /// Меню создания: группа, канал или поиск человека.
+  void _createMenu() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            ListTile(
+              leading:
+                  const Icon(Icons.group_add_rounded, color: LuxeColors.tgBlue),
+              title: const Text('Создать группу'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _open(NewGroupScreen(mode: 'group', onCreated: reload));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.campaign_rounded, color: LuxeColors.tgBlue),
+              title: const Text('Создать канал'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _open(NewGroupScreen(mode: 'channel', onCreated: reload));
+              },
+            ),
+            ListTile(
+              leading:
+                  const Icon(Icons.person_add_alt_rounded, color: LuxeColors.tgBlue),
+              title: const Text('Найти человека по имени'),
+              onTap: () {
+                Navigator.pop(sheet);
+                widget.onNewChat();
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _open(Widget screen) {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+  }
+
   List<_Row> _visible() {
     final q = searchCtrl.text.trim().toLowerCase();
     return rows.where((r) {
@@ -189,13 +244,16 @@ class ChatsTabState extends State<ChatsTab> {
               ),
             ),
           ),
-          // Фильтры
+          // Фильтры + кнопка создания
           SizedBox(
             height: 34,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: filters
+            child: Row(
+              children: [
+                Expanded(
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.only(left: 12, right: 4),
+                    children: filters
                   .map((f) => Padding(
                         padding: const EdgeInsets.only(right: 6),
                         child: FilterChip(
@@ -217,7 +275,21 @@ class ChatsTabState extends State<ChatsTab> {
                           onSelected: (_) => setState(() => filter = f.$1),
                         ),
                       ))
-                  .toList(),
+                    .toList(),
+                  ),
+                ),
+                // Кнопка создания группы или канала
+                IconButton(
+                  tooltip: 'Создать',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                  icon: Icon(Icons.add_circle_outline,
+                      size: 20,
+                      color: dark ? Colors.white70 : Colors.black54),
+                  onPressed: _createMenu,
+                ),
+                const SizedBox(width: 6),
+              ],
             ),
           ),
           const SizedBox(height: 4),

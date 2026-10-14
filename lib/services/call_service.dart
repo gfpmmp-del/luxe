@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../main.dart';
@@ -85,10 +86,12 @@ class CallService {
           _stopCallTimer();
           break;
         case RTCIceConnectionState.RTCIceConnectionStateFailed:
-        case RTCIceConnectionState.RTCIceConnectionStateDisconnected:
-        case RTCIceConnectionState.RTCIceConnectionStateClosed:
+          // Только failed означает реальный обрыв.
+          // disconnected — это временное состояние (сеть моргнула, сеть
+          // переключилась с Wi-Fi на LTE): убивать по нему звонок нельзя,
+          // WebRTC сам восстановит соединение.
           if (!_callEnded) {
-            _endCall(reason: 'Соединение потеряно: $state');
+            _endCall(reason: 'Не удалось соединиться');
           }
           break;
         default:
@@ -97,9 +100,8 @@ class CallService {
     };
     pc!.onConnectionState = (state) {
       if (_callEnded) return;
-      if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-          state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
-        _endCall(reason: 'Соединение не установлено: $state');
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+        _endCall(reason: 'Не удалось соединиться');
       }
     };
     if (localStream != null) {
@@ -186,12 +188,14 @@ class CallService {
       await pc!.setRemoteDescription(
         RTCSessionDescription(payload['sdp'] as String, payload['type'] as String),
       );
+
+      // Кандидаты звонящего могли уйти в БД ДО того, как мы подписались
+      // на Realtime — тогда они потерялись навсегда и P2P не соединялся.
+      // Поэтому забираем из таблицы всё, что накопилось до подписки.
+      await _applyStoredCandidates();
+
       for (final ice in _pendingIce) {
-        await pc!.addCandidate(RTCIceCandidate(
-          ice['candidate'] as String?,
-          ice['sdpMid'] as String?,
-          ice['sdpMLineIndex'] as int?,
-        ));
+        await _addCandidateFromMap(ice);
       }
       _pendingIce.clear();
       final answer = await pc!.createAnswer();
@@ -207,6 +211,36 @@ class CallService {
       _endCall(reason: 'Ошибка принятия звонка: $e');
       rethrow;
     }
+  }
+
+  /// Забрать ICE-кандидаты звонящего, отправленные до нашей подписки.
+  Future<void> _applyStoredCandidates() async {
+    try {
+      final rows = await supabase
+          .from('call_signals')
+          .select('payload')
+          .eq('chat_id', _chatId!)
+          .eq('type', 'ice')
+          .eq('caller_id', _calleeId!)
+          .order('created_at', ascending: true);
+      for (final r in (rows as List)) {
+        final p = (r as Map)['payload'];
+        if (p is Map) await _addCandidateFromMap(Map<String, dynamic>.from(p));
+      }
+    } catch (e) {
+      debugPrint('Не удалось получить сохранённые кандидаты: $e');
+    }
+  }
+
+  /// Безопасное добавление кандидата: типы из JSON не всегда int.
+  Future<void> _addCandidateFromMap(Map<String, dynamic> m) async {
+    if (pc == null) return;
+    final idx = m['sdpMLineIndex'];
+    await pc!.addCandidate(RTCIceCandidate(
+      m['candidate'] as String?,
+      m['sdpMid'] as String?,
+      idx is int ? idx : (idx is num ? idx.toInt() : null),
+    ));
   }
 
   void _listenSignals(String chatId) {
