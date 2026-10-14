@@ -52,8 +52,10 @@ app.*.map.json
 
 # Сгенерированные размеры иконок (собираются скриптом tools/gen_icons.ps1)
 /assets/logo/sizes/
-# Локальная копия firebase_core — восстанавливается из pub-кеша
-/third_party/
+
+# ВАЖНО: third_party/firebase_core НЕ исключать.
+# Это локальная копия firebase_core без секции windows — она нужна,
+# иначе сборка падает с "doesn't exist (could not find package firebase_core)".
 
 # Кэш Flutter
 **/ephemeral/
