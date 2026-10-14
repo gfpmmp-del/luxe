@@ -12,7 +12,9 @@ workflows:
       - name: Get packages
         script: flutter pub get
       - name: Build
-        script: flutter build ios --debug --no-codesign
+        # iOS 14+ не даёт запускать debug-сборки Flutter с домашнего экрана,
+        # поэтому собираем release. --no-codesign — подпись добавит Sideloadly.
+        script: flutter build ios --release --no-codesign --split-debug-info=build/symbols
       - name: Package IPA
         script: |
           cd build/ios/iphoneos
