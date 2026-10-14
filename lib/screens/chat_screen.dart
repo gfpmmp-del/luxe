@@ -47,6 +47,7 @@ class _ChatScreenState extends State<ChatScreen> {
               builder: (_) => CallScreen(
                     chatId: widget.chatId,
                     calleeId: '',
+                    title: widget.title,
                     incomingOffer: widget.incomingOffer,
                     video: true,
                   )),
@@ -138,8 +139,11 @@ class _ChatScreenState extends State<ChatScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-          builder: (_) =>
-              CallScreen(chatId: widget.chatId, calleeId: otherId, video: video)),
+          builder: (_) => CallScreen(
+              chatId: widget.chatId,
+              calleeId: otherId,
+              title: widget.title,
+              video: video)),
     );
   }
 

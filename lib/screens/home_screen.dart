@@ -415,15 +415,34 @@ class IncomingCallCard extends StatelessWidget {
               CoolButton(
                 icon: Icons.call_rounded,
                 label: 'Ответить',
-                onTap: () {
+                onTap: () async {
                   final id = offer['chat_id'] as String;
                   onDismiss();
+                  // Подгружаем имя и аватар звонящего для экрана звонка
+                  var title = '';
+                  String? avatar;
+                  try {
+                    final row = await supabase
+                        .from('profiles')
+                        .select('display_name, username, avatar_url')
+                        .eq('id', offer['caller_id'] as String)
+                        .maybeSingle();
+                    if (row != null) {
+                      final m = Map<String, dynamic>.from(row as Map);
+                      title = (m['display_name'] ?? m['username'] ?? '')
+                          as String;
+                      avatar = m['avatar_url'] as String?;
+                    }
+                  } catch (_) {}
+                  if (!context.mounted) return;
                   Navigator.push(
                     context,
                     MaterialPageRoute(
                         builder: (_) => CallScreen(
                               chatId: id,
                               calleeId: '',
+                              title: title,
+                              avatarUrl: avatar,
                               incomingOffer: offer,
                               video: true,
                             )),

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -138,11 +139,72 @@ class CallService {
 
   Future<void> _openMic({required bool video}) async {
     videoCall = video;
+    await _setupAudioSession();
     localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
       'video': video ? {'facingMode': 'user'} : false,
     });
     localRenderer.srcObject = localStream;
+  }
+
+  bool _speakerOn = true;
+
+  bool get speakerOn => _speakerOn;
+
+  /// Режим разговора: голосовой тракт без шумов и эха.
+  /// iOS по умолчанию звучит в ухо, Android — в разговорный динамик.
+  Future<void> _setupAudioSession() async {
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.defaultToSpeaker,
+        avAudioSessionMode: AVAudioSessionMode.voiceChat,
+        avAudioSessionRouteSharingPolicy:
+            AVAudioSessionRouteSharingPolicy.defaultPolicy,
+        androidAudioAttributes: const AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.speech,
+          usage: AndroidAudioUsage.voiceCommunication,
+        ),
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransient,
+      ));
+      await session.setActive(true);
+      await AndroidAudioManager().setSpeakerphoneOn(_speakerOn);
+    } catch (e) {
+      debugPrint('Аудиосессия не настроена: $e');
+    }
+  }
+
+  /// Переключить звук: наушник ⇄ громкая связь.
+  ///
+  /// Android — прямое переключение speakerphone через
+  /// AndroidAudioManager. iOS — перенастройка категории сессии:
+  /// defaultToSpeaker включает разговорный динамик, none возвращает
+  /// звук в ухо.
+  Future<void> toggleSpeaker() async {
+    _speakerOn = !_speakerOn;
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+        avAudioSessionCategoryOptions: _speakerOn
+            ? AVAudioSessionCategoryOptions.defaultToSpeaker
+            : AVAudioSessionCategoryOptions.none,
+        avAudioSessionMode: AVAudioSessionMode.voiceChat,
+        avAudioSessionRouteSharingPolicy:
+            AVAudioSessionRouteSharingPolicy.defaultPolicy,
+        androidAudioAttributes: const AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.speech,
+          usage: AndroidAudioUsage.voiceCommunication,
+        ),
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransient,
+      ));
+      await session.setActive(true);
+      await AndroidAudioManager().setSpeakerphoneOn(_speakerOn);
+      debugPrint('Звук: ${_speakerOn ? 'динамик' : 'наушник'}');
+    } catch (e) {
+      debugPrint('Не удалось переключить звук: $e');
+    }
   }
 
   /// Исходящий звонок

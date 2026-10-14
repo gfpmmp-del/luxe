@@ -133,6 +133,7 @@ class CallsTabState extends State<CallsTab> {
           builder: (_) => CallScreen(
               chatId: row['chat_id'] as String,
               calleeId: otherId,
+              title: name,
               video: video)),
     ).then((_) => reload());
   }

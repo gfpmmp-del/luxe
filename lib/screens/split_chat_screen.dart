@@ -324,7 +324,11 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
       context,
       MaterialPageRoute(
           builder: (_) => CallScreen(
-              chatId: widget.chatId, calleeId: otherId, video: video)),
+              chatId: widget.chatId,
+              calleeId: otherId,
+              title: widget.title,
+              avatarUrl: _avatar,
+              video: video)),
     );
   }
 

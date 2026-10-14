@@ -17,6 +17,7 @@ dependencies:
   firebase_core: ^3.8.0
   firebase_messaging: ^15.1.5
   flutter_local_notifications: ^18.0.1
+  audio_session: 0.2.1
   url_launcher: ^6.2.0
   uuid: ^4.4.0
   timeago: ^3.6.1
