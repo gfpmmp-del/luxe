@@ -202,10 +202,13 @@ class ChatsTabState extends State<ChatsTab> {
       color: bg,
       child: Column(
         children: [
-          // Поиск
+          // Поиск + кнопка создания
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
-            child: Container(
+            child: Row(
+              children: [
+                Expanded(
+                  child: Container(
               decoration: BoxDecoration(
                 color: dark ? LuxeColors.darkField : const Color(0xFFF1F3F5),
                 borderRadius: BorderRadius.circular(20),
@@ -242,18 +245,37 @@ class ChatsTabState extends State<ChatsTab> {
                     ),
                 ],
               ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Кнопка создания группы / канала
+                Tooltip(
+                  message: 'Создать',
+                  child: InkWell(
+                    onTap: _createMenu,
+                    borderRadius: BorderRadius.circular(22),
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: LuxeColors.tgBlue,
+                        borderRadius: BorderRadius.circular(22),
+                      ),
+                      child: const Icon(Icons.add_rounded,
+                          color: Colors.white, size: 22),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          // Фильтры + кнопка создания
+          // Фильтры
           SizedBox(
             height: 34,
-            child: Row(
-              children: [
-                Expanded(
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.only(left: 12, right: 4),
-                    children: filters
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: filters
                   .map((f) => Padding(
                         padding: const EdgeInsets.only(right: 6),
                         child: FilterChip(
@@ -275,21 +297,7 @@ class ChatsTabState extends State<ChatsTab> {
                           onSelected: (_) => setState(() => filter = f.$1),
                         ),
                       ))
-                    .toList(),
-                  ),
-                ),
-                // Кнопка создания группы или канала
-                IconButton(
-                  tooltip: 'Создать',
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-                  icon: Icon(Icons.add_circle_outline,
-                      size: 20,
-                      color: dark ? Colors.white70 : Colors.black54),
-                  onPressed: _createMenu,
-                ),
-                const SizedBox(width: 6),
-              ],
+                  .toList(),
             ),
           ),
           const SizedBox(height: 4),
