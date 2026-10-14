@@ -37,9 +37,11 @@ class _CallScreenState extends State<CallScreen> {
   bool cameraOff = false;
   bool speaker = true;
   bool inCall = false;
+  bool failed = false;
   String status = 'Соединение...';
   DateTime? _connectedAt;
   Timer? _ticker;
+  Timer? _closeTimer;
 
   String get name =>
       widget.title.isNotEmpty ? widget.title : 'Звонок';
@@ -58,35 +60,48 @@ class _CallScreenState extends State<CallScreen> {
     super.initState();
     call = CallService(
       onRemoteStream: _markConnected,
-      onSignal: (t) {
-        if (t == 'hangup' || t == 'reject') {
-          if (mounted) Navigator.pop(context);
-        }
-      },
+      // Экран закрывает только onCallEnded. Если закрывать ещё и в
+      // onSignal, при сбросе вызывается Navigator.pop дважды — экран
+      // вылетает или остаётся чёрным.
+      onSignal: (_) {},
       onError: (error) {
         if (!mounted) return;
         setState(() {
           inCall = false;
+          failed = true;
           status = error;
         });
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) Navigator.pop(context);
-        });
+        _ticker?.cancel();
+        _closeTimer?.cancel();
+        // Причину сбоя показываем пару секунд, потом закрываем экран.
+        // Раньше закрытие шло сразу и сообщение не успевало показаться.
+        _closeTimer = Timer(const Duration(milliseconds: 1800), _closeOnce);
       },
-      onCallEnded: () {
-        if (mounted) Navigator.pop(context);
-      },
+      onCallEnded: _closeOnce,
     );
     _start();
   }
 
-  void _markConnected() {
+  /// Закрыть экран звонка. Гарантирует один pop за вызовы.
+  void _closeOnce() {
+    _closeTimer?.cancel();
+    _closeTimer = null;
     if (!mounted) return;
+    final nav = Navigator.of(context);
+    if (nav.canPop()) nav.pop();
+  }
+
+  void _markConnected() {
+    // Защита от повторного вызова: иначе тикер запускался бы дважды
+    // и таймер шёл бы вдвое быстрее.
+    if (!mounted || inCall) return;
+    _closeTimer?.cancel();
     setState(() {
       inCall = true;
-      status = 'В эфире';
+      failed = false;
       _connectedAt = DateTime.now();
     });
+    _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
@@ -107,11 +122,14 @@ class _CallScreenState extends State<CallScreen> {
           video: isVideo,
         );
       }
-      if (!inCall && mounted) setState(() => status = 'В эфире');
+      // Статус дальше меняет только реальное соединение или сбой.
+      // Раньше тут безусловно писалось «В эфире» сразу после отправки
+      // offer — звонок ещё не был соединён, но экран врал.
     } catch (e) {
       if (!mounted) return;
       setState(() {
         inCall = false;
+        failed = true;
         status = 'Не удалось соединиться';
       });
     }
@@ -128,6 +146,7 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void dispose() {
     _ticker?.cancel();
+    _closeTimer?.cancel();
     call.hangup();
     call.dispose();
     super.dispose();
@@ -208,8 +227,11 @@ class _CallScreenState extends State<CallScreen> {
                       const SizedBox(height: 6),
                       Text(
                         inCall ? _timer : status,
+                        textAlign: TextAlign.center,
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.7),
+                          color: failed
+                              ? LuxeColors.danger
+                              : Colors.white.withValues(alpha: 0.7),
                           fontSize: 16,
                         ),
                       ),

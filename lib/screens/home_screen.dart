@@ -397,7 +397,20 @@ class IncomingCallCard extends StatelessWidget {
                 ),
               ),
               IconButton(
-                onPressed: onDismiss,
+                // Отклонение должно уйти звонящему, иначе он висит
+                // до таймаута в 30 секунд, думая, что звонок ещё идёт.
+                onPressed: () async {
+                  try {
+                    await supabase.from('call_signals').insert({
+                      'caller_id': AuthService.myId,
+                      'callee_id': offer['caller_id'] as String,
+                      'chat_id': offer['chat_id'] as String,
+                      'type': 'reject',
+                      'payload': {},
+                    });
+                  } catch (_) {}
+                  onDismiss();
+                },
                 icon: Container(
                   padding: const EdgeInsets.all(10),
                   decoration: const BoxDecoration(
@@ -417,8 +430,12 @@ class IncomingCallCard extends StatelessWidget {
                 label: 'Ответить',
                 onTap: () async {
                   final id = offer['chat_id'] as String;
-                  onDismiss();
-                  // Подгружаем имя и аватар звонящего для экрана звонка
+                  // Навигатор захватываем ДО onDismiss: после скрытия
+                  // карточки её context отсоединяется от дерева, и
+                  // проверка mounted ниже всегда даёт false — экран
+                  // звонка просто не открывался.
+                  final nav = Navigator.of(context);
+
                   var title = '';
                   String? avatar;
                   try {
@@ -434,9 +451,9 @@ class IncomingCallCard extends StatelessWidget {
                       avatar = m['avatar_url'] as String?;
                     }
                   } catch (_) {}
-                  if (!context.mounted) return;
-                  Navigator.push(
-                    context,
+
+                  onDismiss();
+                  nav.push(
                     MaterialPageRoute(
                         builder: (_) => CallScreen(
                               chatId: id,
