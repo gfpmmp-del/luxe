@@ -21,8 +21,21 @@ class ContactsTabState extends State<ContactsTab> {
 
   Future<void> _search() async {
     setState(() => searching = true);
-    found = await ChatService.searchUsers(search.text);
-    if (mounted) setState(() => searching = false);
+    try {
+      final r = await ChatService.searchUsers(search.text)
+          .timeout(const Duration(seconds: 15));
+      found = r;
+    } catch (e) {
+      debugPrint('Поиск не отработал: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Поиск не удался, проверьте сеть')),
+        );
+      }
+    } finally {
+      // Без finally индикатор поиска остался бы крутиться вечно
+      if (mounted) setState(() => searching = false);
+    }
   }
 
   @override

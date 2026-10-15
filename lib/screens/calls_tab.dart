@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import '../main.dart';
@@ -28,6 +30,17 @@ class CallsTabState extends State<CallsTab> {
   Future<void> reload() async {
     setState(() => loading = true);
     try {
+      await _load().timeout(const Duration(seconds: 20));
+    } on TimeoutException {
+      debugPrint('История звонков не ответила за 20 секунд');
+    } catch (e) {
+      debugPrint('История звонков не загрузилась: $e');
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Future<void> _load() async {
       final rows = await supabase
           .from('call_signals')
           .select()
@@ -53,11 +66,6 @@ class CallsTabState extends State<CallsTab> {
               (p['display_name'] ?? p['username'] ?? '?') as String;
         }
       }
-    } catch (e) {
-      debugPrint('История звонков не загрузилась: $e');
-    } finally {
-      if (mounted) setState(() => loading = false);
-    }
   }
 
   @override

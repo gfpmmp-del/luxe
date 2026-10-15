@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import '../main.dart';
@@ -40,6 +42,7 @@ class ChatsTabState extends State<ChatsTab> {
   List<_Row> rows = [];
   String filter = 'all';
   bool loading = true;
+  bool loadFailed = false;
   final searchCtrl = TextEditingController();
 
   static const filters = [
@@ -56,9 +59,23 @@ class ChatsTabState extends State<ChatsTab> {
   }
 
   Future<void> reload() async {
-    setState(() => loading = true);
+    setState(() {
+      loading = true;
+      loadFailed = false;
+    });
     try {
-      await _loadRows();
+      // Страховка от вечного спиннера: любой запрос, который зависнет
+      // на слабой сети, обрывается по таймауту, а чаты показываются
+      // хотя бы частично.
+      await _loadRows().timeout(const Duration(seconds: 25));
+    } on TimeoutException {
+      debugPrint('Список чатов не успел загрузиться за 25 секунд');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Сеть не отвечает. Нажмите «Повторить»')),
+        );
+      }
     } catch (e) {
       debugPrint('Список чатов не загрузился: $e');
       if (mounted) {
@@ -68,40 +85,64 @@ class ChatsTabState extends State<ChatsTab> {
       }
     } finally {
       // Без finally спиннер крутился бы вечно при любой ошибке сети
-      if (mounted) setState(() => loading = false);
+      if (mounted) {
+        setState(() {
+          loading = false;
+          loadFailed = rows.isEmpty;
+        });
+      }
     }
   }
 
   Future<void> _loadRows() async {
-    final chats = await ChatService.myChats();
+    final data = await ChatService.chatListData();
+    final chats = data.chats;
     final out = <_Row>[];
     if (chats.isNotEmpty) {
       final ids = chats.map((c) => c['id'] as String).toList();
-      final msgRows = await supabase
-          .from('messages')
-          .select('chat_id, content, created_at, sender_id')
-          .inFilter('chat_id', ids)
-          .order('created_at', ascending: false)
-          .limit(ids.length * 3);
+      // Забираем свежие сообщения одним запросом на все чаты.
+      // Раньше лимит был ids.length * 3, и активный чат «съедал»
+      // почти всю выборку — у остальных чатов превью пропадало.
+      List<Map<String, dynamic>> msgRows = const [];
+      try {
+        final r = await supabase
+            .from('messages')
+            .select('chat_id, content, created_at, sender_id')
+            .inFilter('chat_id', ids)
+            .order('created_at', ascending: false)
+            .limit(400);
+        msgRows = (r as List).cast<Map<String, dynamic>>();
+      } catch (e) {
+        debugPrint('Сообщения не загрузились: $e');
+      }
       final lasts = <String, Map<String, dynamic>>{};
-      for (final r in (msgRows as List).cast<Map<String, dynamic>>()) {
+      for (final r in msgRows) {
         lasts.putIfAbsent(r['chat_id'] as String, () => r);
       }
       for (final c in chats) {
-        final d = await ChatService.chatDisplay(c);
-        final kind = d['kind'] ?? 'direct';
-        final members =
-            kind == 'direct' ? 0 : await ChatService.memberCount(c['id']);
-        // Галочка верификации — только для личных диалогов
+        final id = c['id'] as String;
+        final kind = ChatService.chatKind(c);
+        final ids2 = data.membersByChat[id] ?? const <String>[];
+        final members = kind == 'direct' ? 0 : ids2.length;
+
+        String title;
+        String? avatar;
         var verified = false;
         if (kind == 'direct') {
-          final other = await ChatService.otherUserId(c['id'] as String);
-          if (other.isNotEmpty) {
-            verified = await AuthService.isVerified(other);
-          }
+          final otherId =
+              ids2.firstWhere((u) => u != AuthService.myId, orElse: () => '');
+          final p = otherId.isEmpty ? null : data.profiles[otherId];
+          title = (p?['display_name'] ?? p?['username'] ?? 'Чат') as String;
+          avatar = p?['avatar_url'] as String?;
+          verified = p?['verified'] == true;
+        } else {
+          title = ((c['title'] ??
+                  (kind == 'channel' ? 'Канал' : 'Группа')) as String?) ??
+              'Чат';
+          avatar = c['avatar_url'] as String?;
         }
-        out.add(_Row(c, d['title'] ?? 'Чат', d['avatar'], kind,
-            lasts[c['id'] as String], members,
+
+        out.add(_Row(c, title, avatar, kind, lasts[id], members,
             verified: verified));
       }
     }
@@ -304,23 +345,43 @@ class ChatsTabState extends State<ChatsTab> {
           Expanded(
             child: loading
                 ? const Center(child: CircularProgressIndicator())
-                : list.isEmpty
+                : loadFailed && list.isEmpty
+                    // Раньше при сбое просто показывалось «Ничего не
+                    // найдено» — выглядело как пустой аккаунт, и
+                    // повторить загрузку было нечем.
                     ? EmptyState(
-                        icon: Icons.chat_bubble_outline,
-                        title: 'Ничего не найдено',
-                        subtitle: 'Измените фильтр или создайте новый чат.',
+                        icon: Icons.cloud_off_rounded,
+                        title: 'Не удалось загрузить чаты',
+                        subtitle: 'Проверьте подключение к интернету.',
                         accent: LuxeColors.tgBlue,
                       )
-                    : RefreshIndicator(
-                        onRefresh: reload,
-                        color: LuxeColors.tgBlue,
-                        child: ListView.builder(
-                          itemCount: list.length,
-                          itemBuilder: (context, i) =>
-                              _tile(list[i], dark, list.length),
-                        ),
-                      ),
+                    : list.isEmpty
+                        ? EmptyState(
+                            icon: Icons.chat_bubble_outline,
+                            title: 'Ничего не найдено',
+                            subtitle:
+                                'Измените фильтр или создайте новый чат.',
+                            accent: LuxeColors.tgBlue,
+                          )
+                        : RefreshIndicator(
+                            onRefresh: reload,
+                            color: LuxeColors.tgBlue,
+                            child: ListView.builder(
+                              itemCount: list.length,
+                              itemBuilder: (context, i) =>
+                                  _tile(list[i], dark, list.length),
+                            ),
+                          ),
           ),
+          if (loadFailed && !loading)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: CoolButton(
+                icon: Icons.refresh_rounded,
+                label: 'Повторить',
+                onTap: reload,
+              ),
+            ),
         ],
       ),
     );

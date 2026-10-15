@@ -1,7 +1,16 @@
+import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import '../main.dart';
 import 'auth_service.dart';
 import 'media_service.dart';
+
+/// Всё нужное для списка чатов, собранное фиксированным числом запросов.
+class ChatListData {
+  final List<Map<String, dynamic>> chats;
+  final Map<String, List<String>> membersByChat;
+  final Map<String, Map<String, dynamic>> profiles;
+  const ChatListData(this.chats, this.membersByChat, this.profiles);
+}
 
 class ChatService {
   /// Мои чаты с последним сообщением
@@ -18,6 +27,78 @@ class ChatService {
         .inFilter('id', chatIds)
         .order('created_at', ascending: false);
     return (chats as List).cast<Map<String, dynamic>>();
+  }
+
+  /// Данные для списка чатов: четыре запроса независимо от количества
+  /// чатов.
+  ///
+  /// Раньше на каждый личный чат уходило четыре последовательных запроса
+  /// (участники, профиль, участники ещё раз, верификация). На пятнадцати
+  /// диалогах это шестьдесят запросов подряд, и на слабом телефоне список
+  /// грузился минутами либо зависал навсегда.
+  static Future<ChatListData> chatListData() async {
+    final myId = AuthService.myId;
+    final memberRows = await supabase
+        .from('chat_members')
+        .select('chat_id')
+        .eq('user_id', myId);
+    final chatIds = (memberRows as List)
+        .map((e) => e['chat_id'] as String)
+        .toSet()
+        .toList();
+    if (chatIds.isEmpty) {
+      return const ChatListData([], {}, {});
+    }
+
+    final chats = await supabase
+        .from('chats')
+        .select('id, kind, title, avatar_url, is_group, created_at')
+        .inFilter('id', chatIds)
+        .order('created_at', ascending: false);
+
+    // Все участники моих чатов одним запросом: отсюда же считаем
+    // количество участников и находим собеседника в личном чате.
+    final membersByChat = <String, List<String>>{};
+    final allUserIds = <String>{};
+    final memberAll = await supabase
+        .from('chat_members')
+        .select('chat_id, user_id')
+        .inFilter('chat_id', chatIds);
+    for (final r in (memberAll as List).cast<Map<String, dynamic>>()) {
+      final cid = r['chat_id'] as String;
+      final uid = r['user_id'] as String;
+      (membersByChat[cid] ??= <String>[]).add(uid);
+      allUserIds.add(uid);
+    }
+
+    final profiles = await profilesByIds(allUserIds.toList());
+    return ChatListData(
+        (chats as List).cast<Map<String, dynamic>>(), membersByChat, profiles);
+  }
+
+  /// Профили пользователей по списку id. Запросы режутся порциями,
+  /// иначе длинный список упирается в лимит длины URL у PostgREST.
+  static Future<Map<String, Map<String, dynamic>>> profilesByIds(
+      List<String> ids) async {
+    final out = <String, Map<String, dynamic>>{};
+    if (ids.isEmpty) return out;
+    const chunkSize = 100;
+    for (var i = 0; i < ids.length; i += chunkSize) {
+      final end =
+          (i + chunkSize) > ids.length ? ids.length : (i + chunkSize);
+      try {
+        final rows = await supabase
+            .from('profiles')
+            .select('id, display_name, username, avatar_url, verified, status')
+            .inFilter('id', ids.sublist(i, end));
+        for (final r in (rows as List).cast<Map<String, dynamic>>()) {
+          out[r['id'] as String] = r;
+        }
+      } catch (e) {
+        debugPrint('Профили не загрузились: $e');
+      }
+    }
+    return out;
   }
 
   /// Тип чата: direct | group | channel (старые строки без kind — по is_group)
