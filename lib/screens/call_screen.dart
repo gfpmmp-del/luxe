@@ -35,7 +35,7 @@ class _CallScreenState extends State<CallScreen> {
   late CallService call;
   bool muted = false;
   bool cameraOff = false;
-  bool speaker = true;
+  bool speaker = false;
   bool inCall = false;
   bool failed = false;
   String status = 'Соединение...';
@@ -264,9 +264,12 @@ class _CallScreenState extends State<CallScreen> {
                         icon: Icons.phone_in_talk_rounded,
                         label: 'Динамик',
                         active: speaker,
-                        onTap: () {
-                          setState(() => speaker = !speaker);
-                          call.toggleSpeaker();
+                        onTap: () async {
+                          // Состояние берём у сервиса, иначе экран и
+                          // сам звонок решали по разным копиям флага и
+                          // кнопка показывала не то, что реально включено.
+                          await call.toggleSpeaker();
+                          if (mounted) setState(() => speaker = call.speakerOn);
                         },
                       ),
                       _btn(

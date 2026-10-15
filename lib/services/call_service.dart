@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -19,6 +18,7 @@ class CallService {
   bool videoCall = true;
   RealtimeChannel? _channel;
   final List<Map<String, dynamic>> _pendingIce = [];
+  final Set<String> _addedIce = <String>{};
 
   final void Function()? onRemoteStream;
   final void Function(String type)? onSignal;
@@ -81,7 +81,10 @@ class CallService {
         remoteRenderer.srcObject = event.streams.first;
       }
       // Аудио играет системой автоматически, трек только убеждаемся, что он включён
-      if (event.track.kind == 'audio') event.track.enabled = true;
+      if (event.track.kind == 'audio') {
+        event.track.enabled = true;
+        debugPrint('Пришёл звук от собеседника (трек ${event.track.id})');
+      }
       _markConnected();
     };
     pc!.onIceCandidate = (candidate) async {
@@ -100,6 +103,7 @@ class CallService {
     };
     pc!.onIceConnectionState = (state) {
       if (_callEnded) return;
+      debugPrint('ICE: $state');
       switch (state) {
         case RTCIceConnectionState.RTCIceConnectionStateConnected:
         case RTCIceConnectionState.RTCIceConnectionStateCompleted:
@@ -167,76 +171,77 @@ class CallService {
 
   Future<void> _openMic({required bool video}) async {
     videoCall = video;
-    // Сначала захват микрофона. Аудиосессия настраивается ПОСЛЕ
-    // getUserMedia: flutter_webrtc сам поднимает сессию внутри, и если
-    // настроить её заранее, он может не суметь включить микрофон,
-    // из-за чего падает весь звонок.
     localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
       'video': video ? {'facingMode': 'user'} : false,
     });
     localRenderer.srcObject = localStream;
-    // Не блокирует звонок: ошибка аудиосессии не должна его ронять
-    await _setupAudioSession();
   }
 
-  bool _speakerOn = true;
+  /// По умолчанию звук идёт в разговорный динамик телефона (режим
+  /// inCommunication), громкая связь включается кнопкой.
+  bool _speakerOn = false;
 
   bool get speakerOn => _speakerOn;
 
-  /// Голосовой тракт: разговорный режим без шумов и эха.
+  /// Голосовой режим средствами самого flutter_webrtc.
   ///
-  /// Вызывается после успешного getUserMedia и никогда не бросает
-  /// исключений — маршрутизация звука второстепенна, важнее сам звонок.
-  Future<void> _setupAudioSession() async {
-    // На десктопе маршрут выбирает система, настраивать нечего
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android &&
-        defaultTargetPlatform != TargetPlatform.iOS) {
-      return;
-    }
+  /// Раньше здесь использовался пакет audio_session — и это ломало звонки.
+  /// У flutter_webrtc собственный аудио-модуль: он сам поднимает сессию
+  /// и держит маршрут вывода. Внешний audio_session перебивал его
+  /// настройки, из-за чего пропадал звук, а переключение динамика
+  /// перекрывалось его собственным состоянием.
+  Future<void> _configureCallAudio() async {
+    if (kIsWeb) return;
     try {
-      final session = await AudioSession.instance;
-      await session.configure(AudioSessionConfiguration(
-        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-        avAudioSessionMode: AVAudioSessionMode.voiceChat,
-        avAudioSessionRouteSharingPolicy:
-            AVAudioSessionRouteSharingPolicy.defaultPolicy,
-        androidAudioAttributes: const AndroidAudioAttributes(
-          contentType: AndroidAudioContentType.speech,
-          usage: AndroidAudioUsage.voiceCommunication,
-        ),
-        androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransient,
-      ));
-      await session.setActive(true);
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        // inCommunication + voiceCall: без этого Android играет звонок
+        // в обычный режиме медиа, собеседника почти не слышно.
+        await Helper.setAndroidAudioConfiguration(AndroidAudioConfiguration(
+          manageAudioFocus: true,
+          androidAudioMode: AndroidAudioMode.inCommunication,
+          androidAudioFocusMode: AndroidAudioFocusMode.gain,
+          androidAudioStreamType: AndroidAudioStreamType.voiceCall,
+          androidAudioAttributesUsageType:
+              AndroidAudioAttributesUsageType.voiceCommunication,
+          androidAudioAttributesContentType:
+              AndroidAudioAttributesContentType.speech,
+          // На части телефонов маршрутизация выключается сама —
+          // без этого флага динамик не переключается.
+          forceHandleAudioRouting: true,
+        ));
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        await Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
+          appleAudioCategory: AppleAudioCategory.playAndRecord,
+          appleAudioCategoryOptions: {
+            AppleAudioCategoryOption.allowBluetooth,
+            AppleAudioCategoryOption.defaultToSpeaker,
+          },
+          appleAudioMode: AppleAudioMode.voiceChat,
+        ));
+        await Helper.ensureAudioSession();
+      }
     } catch (e) {
-      debugPrint('Аудиосессия не настроена: $e');
+      // Аудио-настройка не должна ронять звонок
+      debugPrint('Голосовой режим не настроен: $e');
     }
   }
 
   /// Переключить звук: наушник ⇄ громкая связь.
   ///
-  /// Android — прямое переключение speakerphone. Ошибки игнорируются:
-  /// если платформа не поддерживает, звонок всё равно должен идти.
+  /// Переключение делает нативный код flutter_webrtc: на Android это
+  /// включение speakerphone, на iOS — выбор между разговорным динамиком
+  /// и ухом. Прежний audio_session тут был бессилен — он лишь просил
+  /// систему, а WebRTC её тут же переключал обратно.
   Future<void> toggleSpeaker() async {
     _speakerOn = !_speakerOn;
     if (kIsWeb) return;
     try {
-      if (defaultTargetPlatform == TargetPlatform.android) {
-        await AndroidAudioManager().setSpeakerphoneOn(_speakerOn);
-      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-        final session = await AudioSession.instance;
-        await session.configure(AudioSessionConfiguration(
-          avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-          avAudioSessionCategoryOptions: _speakerOn
-              ? AVAudioSessionCategoryOptions.defaultToSpeaker
-              : AVAudioSessionCategoryOptions.none,
-          avAudioSessionMode: AVAudioSessionMode.voiceChat,
-          avAudioSessionRouteSharingPolicy:
-              AVAudioSessionRouteSharingPolicy.defaultPolicy,
-        ));
-        await session.setActive(true);
+      if (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS) {
+        await Helper.setSpeakerphoneOn(_speakerOn);
+        debugPrint('Звук: ${_speakerOn ? 'динамик' : 'наушник'}');
       }
-      debugPrint('Звук: ${_speakerOn ? 'динамик' : 'наушник'}');
     } catch (e) {
       debugPrint('Не удалось переключить звук: $e');
     }
@@ -253,6 +258,8 @@ class CallService {
     _callEnded = false;
     _resetConnected();
     try {
+      // Голосовой режим — до захвата микрофона и до создания соединения
+      await _configureCallAudio();
       await _openMic(video: video);
       await _ensurePeerConnection();
       _listenSignals(chatId);
@@ -280,6 +287,7 @@ class CallService {
     _resetConnected();
     final payload = Map<String, dynamic>.from(offerRow['payload'] as Map);
     try {
+      await _configureCallAudio();
       await _openMic(video: payload['video'] == true);
       await _ensurePeerConnection();
       _listenSignals(_chatId!);
@@ -334,10 +342,14 @@ class CallService {
   /// Безопасное добавление кандидата: типы из JSON не всегда int.
   ///
   /// Ошибка одного кандидата не должна обрывать разбор остальных —
-  /// иначе связь просто не поднимется.
+  /// иначе связь просто не поднимется. Повторы отбрасываются: один и тот
+  /// же кандидат может прийти и через Realtime, и из таблицы.
   Future<void> _addCandidateFromMap(Map<String, dynamic> m) async {
     if (pc == null) return;
     final idx = m['sdpMLineIndex'];
+    final key = '${m['candidate']}|${m['sdpMid']}|$idx';
+    if (_addedIce.contains(key)) return;
+    _addedIce.add(key);
     try {
       await pc!.addCandidate(RTCIceCandidate(
         m['candidate'] as String?,
