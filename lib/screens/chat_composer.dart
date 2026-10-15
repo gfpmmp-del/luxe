@@ -287,47 +287,47 @@ class ChatComposerState extends State<ChatComposer>
               icon: Icon(Icons.mic_none_rounded, size: 22, color: fg),
               tooltip: 'Голосовое сообщение',
             ),
-          if (!widget.isChannel) ...[
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.attach_file_rounded, size: 22),
-              tooltip: 'Прикрепить',
-              onSelected: (v) {
-                switch (v) {
-                  case 'photo':
-                    widget.onAttachPhoto();
-                    break;
-                  case 'video':
-                    widget.onAttachVideo();
-                    break;
-                  case 'circle':
-                    _recordCircle();
-                    break;
-                  default:
-                    widget.onAttachFile();
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: 'photo',
-                  child: ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading:
-                        Icon(Icons.image_rounded, color: LuxeColors.tgBlue),
-                    title: Text('Фото'),
-                  ),
+          // Вложения нужны и в каналах — кружок там лишний, потому
+          // что это личная запись, а не пост.
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.attach_file_rounded, size: 22),
+            tooltip: 'Прикрепить',
+            onSelected: (v) {
+              switch (v) {
+                case 'photo':
+                  widget.onAttachPhoto();
+                  break;
+                case 'video':
+                  widget.onAttachVideo();
+                  break;
+                case 'circle':
+                  _recordCircle();
+                  break;
+                default:
+                  widget.onAttachFile();
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'photo',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.image_rounded, color: LuxeColors.tgBlue),
+                  title: Text('Фото'),
                 ),
-                PopupMenuItem(
-                  value: 'video',
-                  child: ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading:
-                        Icon(Icons.movie_rounded, color: LuxeColors.tgBlue),
-                    title: Text('Видео'),
-                  ),
+              ),
+              const PopupMenuItem(
+                value: 'video',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.movie_rounded, color: LuxeColors.tgBlue),
+                  title: Text('Видео'),
                 ),
-                PopupMenuItem(
+              ),
+              if (!widget.isChannel)
+                const PopupMenuItem(
                   value: 'circle',
                   child: ListTile(
                     dense: true,
@@ -337,19 +337,18 @@ class ChatComposerState extends State<ChatComposer>
                     title: Text('Кружок'),
                   ),
                 ),
-                PopupMenuItem(
-                  value: 'file',
-                  child: ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.insert_drive_file_rounded,
-                        color: LuxeColors.tgBlue),
-                    title: Text('Файл'),
-                  ),
+              const PopupMenuItem(
+                value: 'file',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.insert_drive_file_rounded,
+                      color: LuxeColors.tgBlue),
+                  title: Text('Файл'),
                 ),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
           const SizedBox(width: 4),
           SendButton(onTap: widget.onSend),
         ],
