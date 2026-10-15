@@ -176,6 +176,9 @@ class CallService {
       'video': video ? {'facingMode': 'user'} : false,
     });
     localRenderer.srcObject = localStream;
+    // Только теперь аудиотрек существует — до этого момента плагин
+    // считает, что записывать нечего, и Voice Processing не включается.
+    await _activateVoiceProcessing();
   }
 
   /// По умолчанию звук идёт в разговорный динамик телефона (режим
@@ -196,7 +199,7 @@ class CallService {
     try {
       if (defaultTargetPlatform == TargetPlatform.android) {
         // inCommunication + voiceCall: без этого Android играет звонок
-        // в обычный режиме медиа, собеседника почти не слышно.
+        // в обычном режиме медиа, собеседника почти не слышно.
         await Helper.setAndroidAudioConfiguration(AndroidAudioConfiguration(
           manageAudioFocus: true,
           androidAudioMode: AndroidAudioMode.inCommunication,
@@ -211,6 +214,10 @@ class CallService {
           forceHandleAudioRouting: true,
         ));
       } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        // Режим voiceChat включает у Яблока аппаратную обработку
+        // голоса (Voice Processing I/O): шумоподавление, эхоподавление
+        // и нормализация громкости на уровне железа. Именно она даёт
+        // звук как при обычном звонке, а не как в приложении записи.
         await Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
           appleAudioCategory: AppleAudioCategory.playAndRecord,
           appleAudioCategoryOptions: {
@@ -219,11 +226,34 @@ class CallService {
           },
           appleAudioMode: AppleAudioMode.voiceChat,
         ));
-        await Helper.ensureAudioSession();
+        // Без этого микрофон отключается системным щелчком, который
+        // в мессенджере только раздражает.
+        await Helper.setMicrophoneMuteMode(MicrophoneMuteMode.inputMixer);
       }
     } catch (e) {
       // Аудио-настройка не должна ронять звонок
       debugPrint('Голосовой режим не настроен: $e');
+    }
+  }
+
+  /// Включает аппаратную обработку голоса. Вызывается после
+  /// getUserMedia: до появления аудиотрека плагин считает, что
+  /// записывать нечего, и Voice Processing остаётся выключенным.
+  Future<void> _activateVoiceProcessing() async {
+    if (kIsWeb) return;
+    try {
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        await Helper.ensureAudioSession();
+        // Если обработка обойдена, WebRTC работает «сырым» звуком:
+        // слышно эхо и фоновый шум. Возвращаем её обратно.
+        if (await NativeAudioManagement.isVoiceProcessingBypassed()) {
+          await NativeAudioManagement.setIsVoiceProcessingBypassed(false);
+        }
+        debugPrint('Аппаратная обработка голоса: '
+            '${await NativeAudioManagement.isVoiceProcessingEnabled()}');
+      }
+    } catch (e) {
+      debugPrint('Обработку голоса включить не удалось: $e');
     }
   }
 
@@ -478,8 +508,24 @@ class CallService {
     pc = null;
   }
 
+  /// Выключить микрофон.
+  ///
+  /// Через нативный API, а не только флагом трека: при отключении
+  /// одним лишь track.enabled микрофон продолжает работать на аппаратном
+  /// уровне, Voice Processing это замечает и подкручивает усиление —
+  /// собеседник слышит шум и рычание. Helper.setMicrophoneMute гасит
+  /// сам аудио-модуль и только затем снимает флаг трека.
   void toggleMute(bool muted) {
-    localStream?.getAudioTracks().forEach((t) => t.enabled = !muted);
+    final tracks = localStream?.getAudioTracks() ?? const [];
+    for (final t in tracks) {
+      t.enabled = !muted;
+      if (!kIsWeb) {
+        Helper.setMicrophoneMute(muted, t).catchError((e) {
+          debugPrint('Микрофон не отключился: $e');
+          return Future<void>.value();
+        });
+      }
+    }
   }
 
   void toggleCamera(bool enabled) {
