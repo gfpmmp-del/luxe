@@ -227,6 +227,73 @@ class ChatService {
     return saved;
   }
 
+  /// Голосовое сообщение.
+  ///
+  /// Колонки duration/waveform могут отсутствовать в БД (миграция не
+  /// применена), поэтому они пишутся отдельным UPDATE — как file_name.
+  /// Иначе голосовое вообще не отправилось бы.
+  static Future<Map<String, dynamic>?> sendVoice(
+    String chatId,
+    String url,
+    int durationSeconds,
+    String waveform,
+  ) async {
+    final row = await supabase
+        .from('messages')
+        .insert({
+          'chat_id': chatId,
+          'sender_id': AuthService.myId,
+          'content': 'Голосовое сообщение',
+          'type': 'voice',
+          'file_url': url,
+          'status': 'sent',
+        })
+        .select()
+        .single();
+    final saved = Map<String, dynamic>.from(row as Map);
+    try {
+      await supabase
+          .from('messages')
+          .update({'duration': durationSeconds, 'waveform': waveform})
+          .eq('id', saved['id']);
+    } catch (e) {
+      debugPrint('Длительность голосового не сохранилась: $e');
+    }
+    saved['duration'] = durationSeconds;
+    saved['waveform'] = waveform;
+    return saved;
+  }
+
+  /// Видеокружок.
+  static Future<Map<String, dynamic>?> sendCircle(
+    String chatId,
+    String url,
+    int durationSeconds, {
+    String caption = '',
+  }) async {
+    final row = await supabase
+        .from('messages')
+        .insert({
+          'chat_id': chatId,
+          'sender_id': AuthService.myId,
+          'content': caption.trim(),
+          'type': 'circle',
+          'file_url': url,
+          'status': 'sent',
+        })
+        .select()
+        .single();
+    final saved = Map<String, dynamic>.from(row as Map);
+    try {
+      await supabase
+          .from('messages')
+          .update({'duration': durationSeconds})
+          .eq('id', saved['id']);
+    } catch (_) {}
+    saved['duration'] = durationSeconds;
+    return saved;
+  }
+
   /// Найти пользователя по username и создать/вернуть личную переписку
   static Future<String?> openDirectChat(String username) async {
     final profile = await supabase

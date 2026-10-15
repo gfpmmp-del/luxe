@@ -54,6 +54,37 @@ flutter build windows --release
 - `add_verified.sql` — verified + is_admin
 - `add_premium.sql` — premium + premium_orders
 - `add_attachments.sql` — file_name + file_size
+- `add_voice_stickers.sql` — **обязательно применить перед отправкой
+  голосовых, кружков и стикеров**: duration + waveform в messages,
+  таблица stickers
 
 Триггер на messages обёрнут в `exception when others` — он не должен
 ломать отправку сообщений, даже если Edge Function недоступна.
+
+## Голосовые, кружки и стикеры
+
+Типы сообщений: `voice`, `circle`, `sticker`.
+
+Колонки `duration` и `waveform` пишутся **отдельным UPDATE** после вставки,
+как `file_name`. Причина та же: если миграция не применена, INSERT с этими
+полями упал бы целиком и сообщение не отправилось бы вообще.
+
+Волна хранится строкой из цифр 0–9 (48 символов = пики по всему Голосовому),
+а не JSON-массивом: колонка остаётся лёгкой, а на разбор уходит `VoiceService.unpackWaveform`.
+
+Стикеры лежат в bucket `chat-media` по пути `stickers/`, отдельный бакет
+не заводим — лишний шаг в панели Supabase.
+
+`.tgs` — это zip, Lottie его не читает: такие файлы показываются заглушкой.
+Поддерживается голый `.json` (Lottie), `.gif` и статика (PNG/JPG/WebP).
+
+## Звонки: звук
+
+Звук настраивается **только** средствами flutter_webrtc
+(`Helper.setAndroidAudioConfiguration`, `Helper.setAppleAudioConfiguration`,
+`Helper.setSpeakerphoneOn`). Пакет `audio_session` удалён намеренно:
+он конфликтует с аудио-модулем WebRTC и ломает маршрутизацию.
+
+Настройка идёт **до** `getUserMedia`, `ensureAudioSession()` — **после** него.
+До появления аудиотрека плагин считает, что записывать нечего, и Voice
+Processing (VPIO на iOS) не включается.

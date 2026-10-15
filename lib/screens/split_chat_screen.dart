@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:url_launcher/url_launcher.dart';
@@ -12,6 +12,14 @@ import '../widgets/ticks.dart';
 import '../widgets/verified_badge.dart';
 import 'call_screen.dart';
 import 'group_info_screen.dart';
+import 'chat_composer.dart';
+import 'sticker_panel.dart';
+import 'stickers_screen.dart';
+import '../services/sticker_service.dart';
+import '../widgets/sticker_view.dart';
+import '../widgets/video_circle.dart';
+import '../widgets/voice_message.dart';
+import 'dart:io';
 
 /// Центральная колонка: открытый чат / группа / канал.
 class SplitChatScreen extends StatefulWidget {
@@ -285,6 +293,69 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
   }
 
   /// Заменяем временное сообщение настоящим (Realtime его тоже пришлёт — дедупликация по id).
+  /// Отправить записанное голосовое.
+  Future<void> _sendVoice(File file, int seconds, String waveform) async {
+    final pending = _addPending('voice', 'Голосовое сообщение', null);
+    setState(() {
+      final i = msgs.indexWhere((m) => m['id'] == pending['id']);
+      if (i != -1) {
+        msgs[i]['duration'] = seconds;
+        msgs[i]['waveform'] = waveform;
+      }
+    });
+    try {
+      final url = await MediaService.uploadVoice(file);
+      final saved = await ChatService.sendVoice(
+          widget.chatId, url, seconds, waveform);
+      if (saved != null) _replacePending(pending, saved);
+    } catch (e) {
+      debugPrint('Голосовое не отправилось: $e');
+      _markPendingFailed(pending);
+      _showError('Не удалось отправить голосовое', e);
+    }
+  }
+
+  /// Отправить записанный кружок.
+  Future<void> _sendCircle(File file, int seconds) async {
+    final pending = _addPending('circle', '', null);
+    setState(() {
+      final i = msgs.indexWhere((m) => m['id'] == pending['id']);
+      if (i != -1) msgs[i]['duration'] = seconds;
+    });
+    try {
+      final url = await MediaService.uploadCircle(file);
+      final saved = await ChatService.sendCircle(widget.chatId, url, seconds);
+      if (saved != null) _replacePending(pending, saved);
+    } catch (e) {
+      debugPrint('Кружок не отправился: $e');
+      _markPendingFailed(pending);
+      _showError('Не удалось отправить кружок', e);
+    }
+  }
+
+  /// Отправить стикер из панели.
+  Future<void> _sendSticker(Sticker s) async {
+    final saved = await StickerService.send(widget.chatId, s);
+    if (!mounted) return;
+    if (saved == null) {
+      _showError('Не удалось отправить стикер', 'ошибка отправки');
+    }
+  }
+
+  /// Отметить прослушанное голосовое.
+  Future<void> _markVoicePlayed(Map<String, dynamic> m) async {
+    if (m['id'] == null) return;
+    setState(() => m['heard'] = true);
+    try {
+      await supabase
+          .from('messages')
+          .update({'status': 'read'})
+          .eq('id', m['id']);
+    } catch (_) {
+      // Колонки может не быть — точка просто останется
+    }
+  }
+
   void _replacePending(Map<String, dynamic> pending, Map<String, dynamic> saved) {
     if (!mounted) return;
     setState(() {
@@ -602,11 +673,42 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     final failed = status == 'failed';
     final type = m['type'] as String? ?? 'text';
     final url = m['file_url'] as String?;
+
+    // Стикер стоит отдельно, без пузыря: так он выглядит в Telegram.
+    if (type == 'sticker' && url != null && url.isNotEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Column(
+          crossAxisAlignment:
+              mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            StickerView(
+                url: url, kind: MediaService.stickerKind(url), size: 132),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _time(m),
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: dark ? Colors.white54 : Colors.black45,
+                  ),
+                ),
+                if (mine) Ticks(status: status, lightBubble: !dark),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
     // Пока файл грузится на сервер, ссылки ещё нет — рисуем заглушку,
     // а не падаем на url! (раньше из-за этого весь список сообщений исчезал)
     final uploading = (type == 'image' || type == 'video') &&
         (url == null || url.isEmpty);
-    final hasMedia = url != null && url.isNotEmpty && type != 'text';
+    // У голосового и кружка своя полоса внутри: показывать ещё и текст
+    // «Голосовое сообщение» было бы мусором в чате.
+    final hasMedia =
+        url != null && url.isNotEmpty && type != 'text' && type != 'voice';
 
     // Светлая тема — пузыри как в Telegram: исходящий зелёный, входящий белый
     final bg = failed
@@ -622,7 +724,6 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     // Фото/видео: подпись сверху, само изображение ниже (как в Telegram)
     final caption = (m['content'] ?? '') as String;
     final fileName = (m['file_name'] ?? caption) as String;
-
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 2),
       padding: type == 'image'
@@ -652,6 +753,22 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
         children: [
           if (uploading)
             _uploadPlaceholder(maxW, failed, dark, fileName)
+          else if (type == 'voice' && url != null)
+            VoiceMessage(
+              url: url,
+              waveform: m['waveform'] as String?,
+              durationSeconds: (m['duration'] as num?)?.toInt() ?? 0,
+              mine: mine,
+              dark: dark,
+              played: m['heard'] == true || status == 'read',
+              onPlayed: () => _markVoicePlayed(m),
+            )
+          else if (type == 'circle' && url != null)
+            VideoCircle(
+              url: url,
+              durationSeconds: (m['duration'] as num?)?.toInt() ?? 0,
+              mine: mine,
+            )
           else if (type == 'image' && url != null)
             _imageAttachment(context, m, url, mine, dark, maxW)
           else if (type == 'video' && url != null)
@@ -1112,80 +1229,29 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
   }
 
   Widget _inputRow(bool dark) {
-    return Row(
-      children: [
-        Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-              color: dark ? LuxeColors.darkField : Colors.grey.shade200,
-              borderRadius: BorderRadius.circular(26),
-            ),
-            child: TextField(
-              controller: input,
-              minLines: 1,
-              maxLines: 4,
-              decoration: InputDecoration(
-                hintText: widget.kind == 'channel' ? 'Новый пост...' : 'Сообщение...',
-                border: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 18, vertical: 12),
-              ),
-              onSubmitted: (_) => send(),
-            ),
-          ),
-        ),
-        const SizedBox(width: 6),
-        PopupMenuButton<String>(
-          icon: const Icon(Icons.attach_file_rounded, size: 22),
-          tooltip: 'Прикрепить',
-          onSelected: (v) {
-            switch (v) {
-              case 'photo':
-                _attachPhoto();
-                break;
-              case 'video':
-                _attachVideo();
-                break;
-              default:
-                _attachFile();
-            }
-          },
-          itemBuilder: (context) => const [
-            PopupMenuItem(
-              value: 'photo',
-              child: ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.image_rounded, color: LuxeColors.tgBlue),
-                title: Text('Фото'),
-              ),
-            ),
-            PopupMenuItem(
-              value: 'video',
-              child: ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.movie_rounded, color: LuxeColors.tgBlue),
-                title: Text('Видео'),
-              ),
-            ),
-            PopupMenuItem(
-              value: 'file',
-              child: ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.insert_drive_file_rounded,
-                    color: LuxeColors.tgBlue),
-                title: Text('Файл'),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(width: 4),
-        SendButton(onTap: send),
-      ],
+    return ChatComposer(
+      controller: input,
+      dark: dark,
+      isChannel: widget.kind == 'channel',
+      onSend: send,
+      onVoiceReady: _sendVoice,
+      onCircleReady: _sendCircle,
+      onSticker: _sendSticker,
+      onAddSticker: () async {
+        final ok = await showAddStickerDialog(context);
+        if (!ok || !mounted) return;
+        setState(() {});
+      },
+      onOpenAllStickers: () {
+        Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => const StickersScreen()));
+      },
+      onAttachPhoto: _attachPhoto,
+      onAttachVideo: _attachVideo,
+      onAttachFile: _attachFile,
     );
   }
+
 
   Widget _subscribeRow() {
     return Center(

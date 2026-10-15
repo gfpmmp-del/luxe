@@ -133,6 +133,63 @@ class MediaService {
   static Future<String> uploadPhoto(XFile file) => uploadMedia(file, 'photos');
   static Future<String> uploadVideo(XFile file) => uploadMedia(file, 'videos');
 
+  /// Голосовое сообщение. Файл уже лежит на диске после записи.
+  static Future<String> uploadVoice(File file) async {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final ext = _ext(file.path);
+    return _uploadFile(
+        'voice/$ts.${ext.isEmpty ? 'm4a' : ext}', file, 'audio/mp4');
+  }
+
+  /// Кружок: записанный видеофайл с диска.
+  static Future<String> uploadCircle(File file) async {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    return _uploadFile('circles/$ts.mp4', file, 'video/mp4');
+  }
+
+  /// Стикер: картинка, GIF или Lottie.
+  static Future<String> uploadSticker(XFile file, String kind) async {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final src = file.name.isEmpty ? file.path : file.name;
+    final ext = _ext(src);
+    final name = ext.isEmpty
+        ? (kind == 'lottie' ? 'sticker.json' : 'sticker.gif')
+        : ext;
+    final type = switch (kind) {
+      'gif' => 'image/gif',
+      'lottie' => 'application/json',
+      'webp' => 'image/webp',
+      _ => 'image/jpeg',
+    };
+    return _uploadFile('stickers/$ts.$name', File(file.path), type);
+  }
+
+  /// Выбрать файл стикера. Разрешены GIF, Lottie (json) и картинки.
+  static Future<PlatformFile?> pickStickerFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const [
+        'gif',
+        'json',
+        'tgs',
+        'png',
+        'jpg',
+        'jpeg',
+        'webp'
+      ],
+      allowMultiple: false,
+    );
+    return result?.files.first;
+  }
+
+  /// Тип стикера по расширению: static | gif | lottie
+  static String stickerKind(String name) {
+    final e = _ext(name);
+    if (e == 'json' || e == 'tgs') return 'lottie';
+    if (e == 'gif') return 'gif';
+    return 'static';
+  }
+
   /// Аватарка профиля. Возвращает публичный URL.
   static Future<String> uploadAvatar(String userId, XFile file) {
     final ts = DateTime.now().millisecondsSinceEpoch;
@@ -196,6 +253,68 @@ class MediaService {
     client.close();
 
     return target.path;
+  }
+
+  /// Длительность аудио/видео файла в секундах. 0 — определить не удалось.
+  ///
+  /// Считается по размеру контейнера: у mp4 это поле лежит в заголовке
+  /// и не требует подключения video_player на этапе отправки.
+  static Future<int> durationOf(String path) async {
+    try {
+      final f = File(path);
+      if (!f.existsSync()) return 0;
+      final bytes = await f.readAsBytes();
+      final d = _mp4Duration(bytes) ?? _wavDuration(bytes);
+      return (d ?? 0).ceil();
+    } catch (e) {
+      debugPrint('Длительность не определилась: $e');
+      return 0;
+    }
+  }
+
+  /// Длительность из атома mvhd бокса moov в mp4/m4a/mov.
+  static double? _mp4Duration(List<int> b) {
+    // mvhd: версия 0 — 4-байтные поля, версия 1 — 8-байтные.
+    for (var i = 0; i + 24 < b.length; i++) {
+      if (b[i] == 0x6D && b[i + 1] == 0x76 &&
+          b[i + 2] == 0x68 && b[i + 3] == 0x64) {
+        final version = b[i + 4];
+        if (version == 1) {
+          if (i + 32 >= b.length) return null;
+          final ts = _u32(b, i + 20);
+          final dur = _u64(b, i + 24);
+          if (ts == 0) return null;
+          return dur / ts;
+        }
+        final ts = _u32(b, i + 12);
+        final dur = _u32(b, i + 16);
+        if (ts == 0) return null;
+        return dur / ts;
+      }
+    }
+    return null;
+  }
+
+  /// Длительность wav по заголовку RIFF.
+  static double? _wavDuration(List<int> b) {
+    if (b.length < 44) return null;
+    if (b[0] != 0x52 || b[1] != 0x49 || b[2] != 0x46 || b[3] != 0x46) {
+      return null;
+    }
+    final byteRate = _u32(b, 40);
+    if (byteRate == 0) return null;
+    return (b.length - 44) / byteRate;
+  }
+
+  static int _u32(List<int> b, int i) =>
+      b[i] << 24 | b[i + 1] << 16 | b[i + 2] << 8 | b[i + 3];
+
+  static int _u64(List<int> b, int i) {
+    var v = 0;
+    for (var k = 0; k < 8; k++) {
+      v = v * 256 + b[i + k];
+    }
+    return v;
   }
 
   /// Человекочитаемый размер файла: 1.2 МБ

@@ -8,6 +8,7 @@ import '../services/premium_service.dart';
 import '../theme/luxe_theme.dart';
 import '../widgets/luxe_widgets.dart';
 import 'premium_screen.dart';
+import 'stickers_screen.dart';
 
 /// Вкладка «Настройки» — профиль, тема, выход.
 class SettingsTab extends StatefulWidget {
@@ -325,6 +326,14 @@ class SettingsTabState extends State<SettingsTab> {
                 title: const Text('Creator'),
                 subtitle: const Text('Связаться с разработчиком'),
                 onTap: _openCreatorLink,
+              ),
+              ListTile(
+                leading: const Icon(Icons.emoji_emotions_outlined,
+                    color: LuxeColors.tgBlue),
+                title: const Text('Стикеры'),
+                subtitle: const Text('Мои наборы, добавление и удаление'),
+                onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const StickersScreen())),
               ),
               ListTile(
                 leading:

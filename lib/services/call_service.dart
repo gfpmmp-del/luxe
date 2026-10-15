@@ -172,7 +172,16 @@ class CallService {
   Future<void> _openMic({required bool video}) async {
     videoCall = video;
     localStream = await navigator.mediaDevices.getUserMedia({
-      'audio': true,
+      'audio': {
+        // Без явных true эти обработчики на части платформ
+        // остаются выключенными — отсюда эхо и шум в звонке.
+        'echoCancellation': true,
+        'noiseSuppression': true,
+        'autoGainControl': true,
+        // Один канал: обработке эха нужен стабильный опорный сигнал,
+        // а стерео разводит его по дороге.
+        'channelCount': 1,
+      },
       'video': video ? {'facingMode': 'user'} : false,
     });
     localRenderer.srcObject = localStream;

@@ -25,6 +25,10 @@ dependencies:
   google_fonts: ^6.2.1
   path_provider: ^2.1.6
   http: ^1.6.0
+  record: ^7.1.2
+  just_audio: ^0.10.6
+  lottie: ^3.6.1
+  video_player: ^2.14.1
 
 # Firebase отключён на Windows: FCM там не поддерживается, а нативный SDK
 # firebase_core для Windows весит ~4 ГБ. Локальная копия без windows/.

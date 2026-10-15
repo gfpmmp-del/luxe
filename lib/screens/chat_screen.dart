@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:timeago/timeago.dart' as timeago;
@@ -6,10 +8,17 @@ import '../main.dart';
 import '../services/auth_service.dart';
 import '../services/chat_service.dart';
 import '../services/media_service.dart';
+import '../services/sticker_service.dart';
 import '../theme/luxe_theme.dart';
 import '../widgets/luxe_widgets.dart';
+import '../widgets/sticker_view.dart';
+import '../widgets/video_circle.dart';
+import '../widgets/voice_message.dart';
 import 'call_screen.dart';
+import 'chat_composer.dart';
 import 'group_info_screen.dart';
+import 'sticker_panel.dart';
+import 'stickers_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String chatId;
@@ -130,6 +139,64 @@ class _ChatScreenState extends State<ChatScreen> {
     await ChatService.sendFile(widget.chatId, url, file.name);
   }
 
+  Future<void> _attachPhoto() async {
+    final f = await MediaService.pickPhoto();
+    if (f == null) return;
+    final name = f.name.isEmpty ? 'photo.jpg' : f.name;
+    final url = await MediaService.uploadPhoto(f);
+    await ChatService.sendFile(widget.chatId, url, name, type: 'image');
+  }
+
+  Future<void> _attachVideo() async {
+    final f = await MediaService.pickVideo();
+    if (f == null) return;
+    final name = f.name.isEmpty ? 'video.mp4' : f.name;
+    final url = await MediaService.uploadVideo(f);
+    await ChatService.sendFile(widget.chatId, url, name, type: 'video');
+  }
+
+  /// Отправить записанное голосовое.
+  Future<void> _sendVoice(File file, int seconds, String waveform) async {
+    try {
+      final url = await MediaService.uploadVoice(file);
+      await ChatService.sendVoice(widget.chatId, url, seconds, waveform);
+    } catch (e) {
+      if (mounted) _toast('Не удалось отправить голосовое');
+    }
+  }
+
+  /// Отправить записанный кружок.
+  Future<void> _sendCircle(File file, int seconds) async {
+    try {
+      final url = await MediaService.uploadCircle(file);
+      await ChatService.sendCircle(widget.chatId, url, seconds);
+    } catch (e) {
+      if (mounted) _toast('Не удалось отправить кружок');
+    }
+  }
+
+  /// Отправить стикер из панели.
+  Future<void> _sendSticker(Sticker s) async {
+    final saved = await StickerService.send(widget.chatId, s);
+    if (!mounted) return;
+    if (saved == null) _toast('Не удалось отправить стикер');
+  }
+
+  Future<void> _markVoicePlayed(Map<String, dynamic> m) async {
+    if (m['id'] == null) return;
+    setState(() => m['heard'] = true);
+    try {
+      await supabase
+          .from('messages')
+          .update({'status': 'read'})
+          .eq('id', m['id']);
+    } catch (_) {}
+  }
+
+  void _toast(String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
   void openCall(bool video) {
     if (otherId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -238,6 +305,44 @@ class _ChatScreenState extends State<ChatScreen> {
                       itemBuilder: (context, i) {
                         final m = msgs[i];
                         final mine = m['sender_id'] == myId;
+                        // Стикер показываем без пузыря, как в Telegram
+                        if (m['type'] == 'sticker' &&
+                            m['file_url'] != null &&
+                            '${m['file_url']}'.isNotEmpty) {
+                          return Align(
+                            alignment: mine
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 4),
+                              child: Column(
+                                crossAxisAlignment: mine
+                                    ? CrossAxisAlignment.end
+                                    : CrossAxisAlignment.start,
+                                children: [
+                                  StickerView(
+                                    url: m['file_url'] as String,
+                                    kind: MediaService.stickerKind(
+                                        m['file_url'] as String),
+                                    size: 124,
+                                  ),
+                                  Text(
+                                    timeago.format(
+                                        DateTime.parse(m['created_at'])
+                                            .toLocal(),
+                                        locale: 'ru'),
+                                    style: TextStyle(
+                                        color: dark
+                                            ? Colors.white54
+                                            : Colors.black45,
+                                        fontSize: 10),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }
                         return GestureDetector(
                           onLongPress: mine ? () async {
                             final confirm = await showDialog<bool>(
@@ -290,7 +395,28 @@ class _ChatScreenState extends State<ChatScreen> {
                               crossAxisAlignment: CrossAxisAlignment.end,
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                if (m['type'] == 'file' && m['file_url'] != null)
+                                if (m['type'] == 'voice' &&
+                                    m['file_url'] != null)
+                                  VoiceMessage(
+                                    url: m['file_url'] as String,
+                                    waveform: m['waveform'] as String?,
+                                    durationSeconds:
+                                        (m['duration'] as num?)?.toInt() ?? 0,
+                                    mine: mine,
+                                    dark: dark,
+                                    played: m['heard'] == true ||
+                                        m['status'] == 'read',
+                                    onPlayed: () => _markVoicePlayed(m),
+                                  )
+                                else if (m['type'] == 'circle' &&
+                                    m['file_url'] != null)
+                                  VideoCircle(
+                                    url: m['file_url'] as String,
+                                    durationSeconds:
+                                        (m['duration'] as num?)?.toInt() ?? 0,
+                                    mine: mine,
+                                  )
+                                else if (m['type'] == 'file' && m['file_url'] != null)
                                   Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
@@ -352,43 +478,25 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
           SafeArea(
-            child: Container(
-              color: dark ? LuxeColors.darkCard : Colors.white,
-              padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: dark
-                            ? LuxeColors.darkField
-                            : Colors.grey.shade200,
-                        borderRadius: BorderRadius.circular(26),
-                      ),
-                      child: TextField(
-                        controller: input,
-                        minLines: 1,
-                        maxLines: 4,
-                        decoration: const InputDecoration(
-                          hintText: 'Сообщение...',
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(
-                              horizontal: 18, vertical: 12),
-                        ),
-                        onSubmitted: (_) => send(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: const Icon(Icons.attach_file_rounded, size: 22),
-                    onPressed: _attachFile,
-                    tooltip: 'Прикрепить файл',
-                  ),
-                  const SizedBox(width: 4),
-                  SendButton(onTap: send),
-                ],
-              ),
+            child: ChatComposer(
+              controller: input,
+              dark: dark,
+              isChannel: false,
+              onSend: send,
+              onVoiceReady: _sendVoice,
+              onCircleReady: _sendCircle,
+              onSticker: _sendSticker,
+              onAddSticker: () async {
+                final ok = await showAddStickerDialog(context);
+                if (ok && mounted) setState(() {});
+              },
+              onOpenAllStickers: () {
+                Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const StickersScreen()));
+              },
+              onAttachPhoto: _attachPhoto,
+              onAttachVideo: _attachVideo,
+              onAttachFile: _attachFile,
             ),
           ),
         ],
