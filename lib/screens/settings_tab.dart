@@ -10,6 +10,7 @@ import '../theme/luxe_theme.dart';
 import '../widgets/luxe_widgets.dart';
 import 'premium_screen.dart';
 import 'stickers_screen.dart';
+import 'update_screen.dart';
 
 /// Вкладка «Настройки» — профиль, тема, выход.
 class SettingsTab extends StatefulWidget {
@@ -327,6 +328,14 @@ class SettingsTabState extends State<SettingsTab> {
                 title: const Text('Creator'),
                 subtitle: const Text('Связаться с разработчиком'),
                 onTap: _openCreatorLink,
+              ),
+              ListTile(
+                leading: const Icon(Icons.system_update_alt_rounded,
+                    color: LuxeColors.tgBlue),
+                title: const Text('Обновления'),
+                subtitle: const Text('Проверить новую версию'),
+                onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const UpdateScreen())),
               ),
               ListTile(
                 leading: const Icon(Icons.emoji_emotions_outlined,

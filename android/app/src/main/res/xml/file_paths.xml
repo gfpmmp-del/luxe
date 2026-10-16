@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Пути, из которых приложение может отдать установщику скачанный APK.
+     Без этого FileProvider не сможет открыть файл и выдаст ошибку. -->
+<paths>
+    <cache-path name="updates" path="updates/" />
+    <cache-path name="downloads" path="downloads/" />
+    <external-cache-path name="ext_updates" path="updates/" />
+    <external-files-path name="files_updates" path="updates/" />
+</paths>

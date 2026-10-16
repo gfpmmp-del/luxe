@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "notes": "Текущая версия. Обновите это поле перед выпуском новой сборки.",
+  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.0.0/luxe.apk",
+  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.0.0/LuxeMessenger-windows.zip"
+}

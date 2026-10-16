@@ -114,6 +114,31 @@ flutter build apk --release --dart-define=SUPABASE_URL=https://luxe-proxy.<ни�
 Если Worker придётся чинить — смотреть на доставку ответа клиенту,
 а не на проброс заголовков: запросы до Worker доходят, логи это показывают.
 
+## Обновления
+
+Приложение само проверяет `latest.json` в корне репозитория:
+`https://raw.githubusercontent.com/gfpmmp-del/luxe/master/latest.json`
+Запасной адрес — тот же файл в бакете `chat-media` на случай, если сеть
+режет GitHub.
+
+**Перед выпуском новой версии:**
+1. Поднять `version` в `pubspec.yaml` и в `latest.json`
+2. Собрать с `--dart-define=APP_VERSION=<версия>` — без него приложение
+   считает себя `1.0.0` и обновление не предложит
+3. Выложить `luxe.apk` и `LuxeMessenger-windows.zip` в Releases GitHub
+   с тегом `v<версия>`
+4. Обновить ссылки `apk_url` и `zip_url` в `latest.json`
+5. `git add -A && git commit && git push`
+
+**Где что невозможно:**
+- iOS — приложение не может обновить себя, только TestFlight или App Store
+- Android — система всё равно спросит подтверждение установки
+- Windows — файлы заняты запущенной программой, подменой занимается
+  маленький `.cmd` после выхода из приложения
+
+`AndroidManifest.xml` объявляет `FileProvider`, без него системный
+установщик не откроет скачанный APK. Пути — в `res/xml/file_paths.xml`.
+
 ## Голосовые: важная деталь
 
 `record` требует **настоящий** путь к файлу. На Android внутри стоит
