@@ -25,25 +25,17 @@ class Net {
   /// проверка не дала результата.
   static bool forceIpv4 = false;
 
-  /// HTTP-клиент с вменяемыми таймаутами.
+  /// HTTP-клиент для приложения.
   ///
-  /// Без них HttpClient на телефоне висит до системного таймаута —
-  /// это две минуты немого белого экрана.
-  static http.Client buildClient() {
-    final inner = HttpClient()
-      ..connectionTimeout = connectTimeout
-      ..idleTimeout = idleTimeout
-      // Одно соединение на хост. Dart держит пул живых сокетов и
-      // переиспользует их; на мобильной сети переподключение
-      // случается незаметно, и следующий запрос уходит в мёртвый сокет
-      // и виснет до таймаута. Одно соединение заставляет клиент
-      // вовремя заметить, что сокет мёртв, и открыть новый.
-      ..maxConnectionsPerHost = 1
-      // Доверяем обычным сертификатам. Смысла ослаблять проверку нет:
-      // нашим сертификатам это не поможет, а защиту сломает.
-      ..badCertificateCallback = (cert, host, port) => false;
-    return IOClient(inner);
-  }
+  /// Соединение на каждый запрос своё. Dart держит пул сокетов и
+  /// переиспользует их: если сеть под сокетом умерла (переключение
+  /// Wi-Fi на LTE, смена вышки, iOS усыпил приложение), сокет в пуле
+  /// остаётся, следующий запрос уходит в него и висит до таймаута.
+  /// Повтор запроса не помогает — он уходит в тот же мёртвый сокет.
+  ///
+  /// Именно это и было: проверка связи шла свежим клиентом и проходила,
+  /// а настоящие запросы упирались в соединение из пула.
+  static http.Client buildClient() => _FreshConnectionClient();
 
   /// Проверить конкретный адрес: и вход, и запрос к базе.
   ///
@@ -146,5 +138,43 @@ class Net {
           'Сеть, похоже, фильтрует трафик.';
     }
     return e.toString();
+  }
+}
+
+/// HTTP-клиент, который открывает новое соединение на каждый запрос.
+///
+/// Нужен из-за пула сокетов: соединение, пережившее смену сети,
+/// формально остаётся «живым» в глазах клиента, но трафик по нему
+/// больше не идёт. Повтор запроса в тот же сокет не спасает — он
+/// снова упирается в него же.
+class _FreshConnectionClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final inner = HttpClient()
+      ..connectionTimeout = Net.connectTimeout
+      ..idleTimeout = Net.idleTimeout
+      ..badCertificateCallback = (cert, host, port) => false;
+    final client = IOClient(inner);
+    try {
+      final res = await client.send(request);
+      // Закрываем соединение, только когда тело дочитано: закрыть
+      // раньше — значит оборвать ответ на середине.
+      res.stream.listen(
+        (_) {},
+        onDone: () => inner.close(force: false),
+        onError: (_) => inner.close(force: true),
+        cancelOnError: true,
+      );
+      return res;
+    } catch (e) {
+      inner.close(force: true);
+      client.close();
+      rethrow;
+    }
+  }
+
+  @override
+  void close() {
+    // Соединения и так закрываются по завершении запросов
   }
 }
