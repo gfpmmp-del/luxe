@@ -24,7 +24,11 @@ Future<void> main() async {
 class LuxeHttpOverrides extends HttpOverrides {
   @override
   HttpClient createHttpClient(SecurityContext? context) {
-    return HttpClient()
+    // Именно super, а не HttpClient(). Конструктор HttpClient() сам
+    // обращается к настройкам и вызывает createHttpClient снова — если
+    // вызвать его здесь, получится бесконечная рекурсия и «Stack Overflow»
+    // при первом же сетевом запросе.
+    return super.createHttpClient(context)
       ..connectionTimeout = const Duration(seconds: 10)
       ..idleTimeout = const Duration(seconds: 20)
       ..maxConnectionsPerHost = 4
