@@ -57,10 +57,31 @@ export default {
         `${upstream.status} за ${Date.now() - started}мс`
       );
 
-      return new Response(upstream.body, {
+      const respHeaders = forwardResponseHeaders(upstream.headers);
+
+      // Файлы отдаём потоком: фотография весом 20 МБ не должна
+      // целиком оседать в памяти воркера (лимит — 128 МБ).
+      if (url.pathname.startsWith('/storage/v1/object/')) {
+        return new Response(upstream.body, {
+          status: upstream.status,
+          statusText: upstream.statusText,
+          headers: respHeaders,
+        });
+      }
+
+      // Всё остальное — короткие ответы API — собираем целиком.
+      // Поток здесь и был причиной зависания: воркер отдавал тело
+      // частями, телефон подключение держал и ждал продолжения,
+      // которого уже не было, пока не срабатывал таймаут.
+      const body = await upstream.arrayBuffer();
+      respHeaders.set('content-length', String(body.byteLength));
+      console.log(
+        `  отдаём ${body.byteLength} байт для ${url.pathname}`
+      );
+      return new Response(body, {
         status: upstream.status,
         statusText: upstream.statusText,
-        headers: forwardResponseHeaders(upstream.headers),
+        headers: respHeaders,
       });
     } catch (e) {
       // Сеть обрезала соединение на полпути. 502 честнее, чем
