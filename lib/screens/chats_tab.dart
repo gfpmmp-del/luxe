@@ -1,16 +1,19 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:timeago/timeago.dart' as timeago;
+
 import '../main.dart';
 import '../services/auth_service.dart';
 import '../services/chat_service.dart';
+import '../services/media_service.dart';
 import '../services/net.dart';
 import '../theme/luxe_theme.dart';
 import '../widgets/luxe_widgets.dart';
 import '../widgets/verified_badge.dart';
+import 'global_search_screen.dart';
 import 'new_group_screen.dart';
 
+/// Строка списка чатов.
 class _Row {
   final Map<String, dynamic> chat;
   final String title;
@@ -23,7 +26,7 @@ class _Row {
       {this.verified = false});
 }
 
-/// Колонка списка чатов: поиск, фильтры, строки диалогов.
+/// Вкладка списка чатов: поиск, фильтры, строки диалогов.
 class ChatsTab extends StatefulWidget {
   final void Function(Map<String, dynamic> chat) onOpenChat;
   final String? openChatId;
@@ -34,6 +37,12 @@ class ChatsTab extends StatefulWidget {
     required this.openChatId,
     required this.onNewChat,
   });
+
+  /// Счётчик непрочитанных для иконки «Чаты» в боковой колонке.
+  ///
+  /// Раньше там стояла захардкоженная пятёрка: человек видел «5»
+  /// независимо от того, сколько непрочитанных на самом деле.
+  static final unread = ValueNotifier<int>(0);
 
   @override
   State<ChatsTab> createState() => ChatsTabState();
@@ -48,7 +57,7 @@ class ChatsTabState extends State<ChatsTab> {
   final searchCtrl = TextEditingController();
 
   static const filters = [
-    ('all', 'Все чаты', Icons.forum_outlined),
+    ('all', 'Все', Icons.forum_outlined),
     ('personal', 'Личные', Icons.person_outline),
     ('groups', 'Группы', Icons.group_outlined),
     ('channels', 'Каналы', Icons.campaign_outlined),
@@ -58,6 +67,12 @@ class ChatsTabState extends State<ChatsTab> {
   void initState() {
     super.initState();
     reload();
+  }
+
+  @override
+  void dispose() {
+    searchCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> reload() async {
@@ -107,9 +122,7 @@ class ChatsTabState extends State<ChatsTab> {
   String _describe(Object e) {
     final raw = e.toString();
     final named = RegExp(r'«(.+?)»').firstMatch(raw);
-    if (named != null) {
-      return 'Не отвечает запрос: ${named.group(1)}';
-    }
+    if (named != null) return 'Не отвечает запрос: ${named.group(1)}';
     return Net.humanError(e);
   }
 
@@ -119,14 +132,12 @@ class ChatsTabState extends State<ChatsTab> {
     final out = <_Row>[];
     if (chats.isNotEmpty) {
       final ids = chats.map((c) => c['id'] as String).toList();
-      // Забираем свежие сообщения одним запросом на все чаты.
-      // Раньше лимит был ids.length * 3, и активный чат «съедал»
-      // почти всю выборку — у остальных чатов превью пропадало.
+      // Свежие сообщения одним запросом на все чаты.
       List<Map<String, dynamic>> msgRows = const [];
       try {
         final r = await supabase
             .from('messages')
-            .select('chat_id, content, created_at, sender_id')
+            .select('chat_id, content, created_at, sender_id, type, status')
             .inFilter('chat_id', ids)
             .order('created_at', ascending: false)
             .limit(400);
@@ -179,6 +190,8 @@ class ChatsTabState extends State<ChatsTab> {
       return db.compareTo(da);
     });
     rows = out;
+    ChatsTab.unread.value =
+        out.where((r) => r.last != null && _unread(r.last!)).length;
   }
 
   /// Меню создания: группа, канал или поиск человека.
@@ -194,13 +207,13 @@ class ChatsTabState extends State<ChatsTab> {
               width: 36,
               height: 4,
               decoration: BoxDecoration(
-                color: Colors.grey.shade300,
+                color: Theme.of(context).colorScheme.outlineVariant,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
             ListTile(
-              leading:
-                  const Icon(Icons.group_add_rounded, color: LuxeColors.tgBlue),
+              leading: const Icon(Icons.group_add_rounded,
+                  color: LuxeColors.tgBlue),
               title: const Text('Создать группу'),
               onTap: () {
                 Navigator.pop(sheet);
@@ -208,7 +221,8 @@ class ChatsTabState extends State<ChatsTab> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.campaign_rounded, color: LuxeColors.tgBlue),
+              leading:
+                  const Icon(Icons.campaign_rounded, color: LuxeColors.tgBlue),
               title: const Text('Создать канал'),
               onTap: () {
                 Navigator.pop(sheet);
@@ -216,12 +230,13 @@ class ChatsTabState extends State<ChatsTab> {
               },
             ),
             ListTile(
-              leading:
-                  const Icon(Icons.person_add_alt_rounded, color: LuxeColors.tgBlue),
-              title: const Text('Найти человека по имени'),
+              leading: const Icon(Icons.person_search_rounded,
+                  color: LuxeColors.tgBlue),
+              title: const Text('Найти человека'),
+              subtitle: const Text('Поиск по всем пользователям'),
               onTap: () {
                 Navigator.pop(sheet);
-                widget.onNewChat();
+                _openSearch();
               },
             ),
             const SizedBox(height: 8),
@@ -231,8 +246,33 @@ class ChatsTabState extends State<ChatsTab> {
     );
   }
 
-  void _open(Widget screen) {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+  void _open(NewGroupScreen s) {
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => s))
+        .then((_) => reload());
+  }
+
+  /// Глобальный поиск: люди, группы, каналы.
+  void _openSearch() {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => GlobalSearchScreen(
+        onOpenChat: (id) => _openChatById(id),
+      ),
+    ));
+  }
+
+  /// Открыть чат по id. Если его нет в загруженном списке — сначала
+  /// перезагружаем список: чат могли только что создать или найти.
+  Future<void> _openChatById(String chatId) async {
+    final found = rows.where((r) => r.chat['id'] == chatId).firstOrNull;
+    if (found != null) {
+      widget.onOpenChat(found.chat);
+      return;
+    }
+    await reload();
+    if (!mounted) return;
+    final again = rows.where((r) => r.chat['id'] == chatId).firstOrNull;
+    if (again != null) widget.onOpenChat(again.chat);
   }
 
   List<_Row> _visible() {
@@ -254,113 +294,27 @@ class ChatsTabState extends State<ChatsTab> {
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final bg = dark ? LuxeColors.darkBg : const Color(0xFFFFFFFF);
+    final scheme = Theme.of(context).colorScheme;
     final list = _visible();
 
     return Container(
-      color: bg,
+      color: scheme.surface,
       child: Column(
         children: [
-          // Поиск + кнопка создания
+          // Поиск ведёт в общий поиск, а не фильтрует текущий список
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
             child: Row(
               children: [
                 Expanded(
-                  child: Container(
-              decoration: BoxDecoration(
-                color: dark ? LuxeColors.darkField : const Color(0xFFF1F3F5),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Row(
-                children: [
-                  Icon(Icons.search,
-                      size: 20,
-                      color: dark ? Colors.white54 : Colors.black45),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      controller: searchCtrl,
-                      style: const TextStyle(fontSize: 15),
-                      decoration: const InputDecoration(
-                        hintText: 'Поиск',
-                        border: InputBorder.none,
-                        isDense: true,
-                        contentPadding: EdgeInsets.symmetric(vertical: 12),
-                      ),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ),
-                  if (searchCtrl.text.isNotEmpty)
-                    GestureDetector(
-                      onTap: () {
-                        searchCtrl.clear();
-                        setState(() {});
-                      },
-                      child: Icon(Icons.close,
-                          size: 18,
-                          color: dark ? Colors.white54 : Colors.black45),
-                    ),
-                ],
-              ),
-                  ),
+                  child: _searchBox(scheme),
                 ),
                 const SizedBox(width: 8),
-                // Кнопка создания группы / канала
-                Tooltip(
-                  message: 'Создать',
-                  child: InkWell(
-                    onTap: _createMenu,
-                    borderRadius: BorderRadius.circular(22),
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: LuxeColors.tgBlue,
-                        borderRadius: BorderRadius.circular(22),
-                      ),
-                      child: const Icon(Icons.add_rounded,
-                          color: Colors.white, size: 22),
-                    ),
-                  ),
-                ),
+                _createButton(scheme),
               ],
             ),
           ),
-          // Фильтры
-          SizedBox(
-            height: 34,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: filters
-                  .map((f) => Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: FilterChip(
-                          label: Text(f.$2),
-                          avatar: Icon(f.$3, size: 15),
-                          selected: filter == f.$1,
-                          showCheckmark: false,
-                          visualDensity: VisualDensity.compact,
-                          labelStyle: TextStyle(
-                            fontSize: 12,
-                            color: filter == f.$1
-                                ? Colors.white
-                                : (dark ? Colors.white70 : Colors.black87),
-                          ),
-                          selectedColor: LuxeColors.tgBlue,
-                          backgroundColor: dark
-                              ? LuxeColors.darkField
-                              : const Color(0xFFF1F3F5),
-                          onSelected: (_) => setState(() => filter = f.$1),
-                        ),
-                      ))
-                  .toList(),
-            ),
-          ),
-          const SizedBox(height: 4),
+          _filterRow(scheme),
           Expanded(
             child: loading
                 ? const Center(child: CircularProgressIndicator())
@@ -377,10 +331,15 @@ class ChatsTabState extends State<ChatsTab> {
                       )
                     : list.isEmpty
                         ? EmptyState(
-                            icon: Icons.chat_bubble_outline,
-                            title: 'Ничего не найдено',
-                            subtitle:
-                                'Измените фильтр или создайте новый чат.',
+                            icon: searchCtrl.text.isEmpty
+                                ? Icons.forum_outlined
+                                : Icons.search_off_rounded,
+                            title: searchCtrl.text.isEmpty
+                                ? 'Здесь появятся ваши чаты'
+                                : 'Ничего не найдено',
+                            subtitle: searchCtrl.text.isEmpty
+                                ? 'Найдите человека в поиске или создайте группу.'
+                                : 'Попробуйте другое слово.',
                             accent: LuxeColors.tgBlue,
                           )
                         : RefreshIndicator(
@@ -389,7 +348,7 @@ class ChatsTabState extends State<ChatsTab> {
                             child: ListView.builder(
                               itemCount: list.length,
                               itemBuilder: (context, i) =>
-                                  _tile(list[i], dark, list.length),
+                                  _tile(list[i], i),
                             ),
                           ),
           ),
@@ -407,29 +366,123 @@ class ChatsTabState extends State<ChatsTab> {
     );
   }
 
-  Widget _tile(_Row r, bool dark, int index) {
+  /// Поле поиска. По нажатию открывается общий поиск по людям и группам.
+  Widget _searchBox(ColorScheme scheme) {
+    return Material(
+      color: Theme.of(context).colorScheme.brightness == Brightness.dark
+          ? LuxeColors.darkField
+          : LuxeColors.lightField,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: _openSearch,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          child: Row(
+            children: [
+              Icon(Icons.search_rounded, size: 19, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  'Поиск людей и групп',
+                  style: TextStyle(fontSize: 14, color: scheme.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _createButton(ColorScheme scheme) {
+    return Material(
+      color: LuxeColors.brand,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: _createMenu,
+        child: const SizedBox(
+          width: 42,
+          height: 42,
+          child: Icon(Icons.add_rounded, color: Colors.white, size: 22),
+        ),
+      ),
+    );
+  }
+
+  /// Фильтры: спокойные сегменты вместо пёстрых чипов.
+  Widget _filterRow(ColorScheme scheme) {
+    return SizedBox(
+      height: 40,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+        itemCount: filters.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 6),
+        itemBuilder: (_, i) {
+          final f = filters[i];
+          final on = filter == f.$1;
+          return GestureDetector(
+            onTap: () => setState(() => filter = f.$1),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: on ? LuxeColors.brand : scheme.outlineVariant.withValues(alpha: 0.45),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    f.$3,
+                    size: 14,
+                    color: on ? Colors.white : scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    f.$2,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: on ? FontWeight.w600 : FontWeight.w500,
+                      color: on ? Colors.white : scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _tile(_Row r, int index) {
     final selected = widget.openChatId == r.chat['id'];
-    final mine = r.last != null &&
-        r.last!['sender_id'] == AuthService.myId;
-    final text = r.last == null
-        ? (r.kind == 'channel'
-            ? 'Канал'
-            : r.kind == 'group'
-                ? 'Группа'
-                : 'Начните переписку')
-        : (mine ? 'Вы: ${r.last!['content']}' : r.last!['content']);
+    final mine = r.last != null && r.last!['sender_id'] == AuthService.myId;
+    final scheme = Theme.of(context).colorScheme;
+
+    // Превью сообщения: у медиа вместо текста приходит ссылка,
+    // её показывать нельзя — читатель видит «Начните переписку».
+    final raw = r.last == null
+        ? null
+        : (mine ? 'Вы: ${r.last!['content']}' : r.last!['content']).toString();
+    final text = _preview(raw, r);
 
     return InkWell(
       onTap: () => widget.onOpenChat(r.chat),
       child: Container(
-        color: selected
-            ? LuxeColors.tgBlue.withValues(alpha: dark ? 0.25 : 0.12)
-            : (index.isOdd
-                ? (dark
-                    ? const Color(0xFF0E1621)
-                    : const Color(0xFFFAFAFA))
-                : Colors.transparent),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected
+              ? LuxeColors.brand.withValues(alpha: scheme.brightness == Brightness.dark ? 0.16 : 0.09)
+              : null,
+          border: Border(
+            bottom: BorderSide(
+              color: scheme.outlineVariant.withValues(alpha: 0.5),
+            ),
+          ),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         child: Row(
           children: [
             _avatar(r),
@@ -445,64 +498,64 @@ class ChatsTabState extends State<ChatsTab> {
                           r.title,
                           verified: r.verified,
                           style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: selected && !dark
-                                  ? LuxeColors.tgBlueDark
-                                  : null),
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: scheme.onSurface,
+                          ),
                         ),
                       ),
                       if (r.last != null)
                         Text(
-                          timeago.format(
-                              DateTime.parse(r.last!['created_at'])
-                                  .toLocal(),
-                              locale: 'ru'),
-                          style: TextStyle(
-                              fontSize: 11,
-                              color: dark ? Colors.white38 : Colors.black45),
+                          _when(r.last!['created_at']),
+                          style:
+                              TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
                         ),
                     ],
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 3),
                   Row(
                     children: [
-                      if (r.kind == 'channel')
-                        const Padding(
-                          padding: EdgeInsets.only(right: 4),
-                          child: Icon(Icons.campaign_rounded,
-                              size: 13, color: LuxeColors.tgBlue),
-                        )
-                      else if (r.kind == 'group')
-                        const Padding(
-                          padding: EdgeInsets.only(right: 4),
-                          child: Icon(Icons.group_rounded,
-                              size: 13, color: Colors.grey),
+                      if (r.kind != 'direct')
+                        Padding(
+                          padding: const EdgeInsets.only(right: 5),
+                          child: Icon(
+                            r.kind == 'channel'
+                                ? Icons.campaign_rounded
+                                : Icons.group_rounded,
+                            size: 14,
+                            color: r.kind == 'channel'
+                                ? LuxeColors.tgBlue
+                                : scheme.onSurfaceVariant,
+                          ),
                         ),
                       Expanded(
-                        child: Text(text,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                                fontSize: 13,
-                                color: dark ? Colors.white54 : Colors.black54)),
-                      ),
-                      if (r.kind != 'direct')
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: dark
-                                ? Colors.white12
-                                : Colors.grey.shade300,
-                            borderRadius: BorderRadius.circular(8),
+                        child: Text(
+                          text,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: raw == null
+                                ? scheme.onSurfaceVariant
+                                : scheme.onSurface.withValues(alpha: 0.72),
                           ),
-                          child: Text('${r.members}',
-                              style: TextStyle(
-                                  fontSize: 10,
-                                  color: dark
-                                      ? Colors.white70
-                                      : Colors.black54)),
+                        ),
+                      ),
+                      if (r.kind != 'direct') ...[
+                        const SizedBox(width: 6),
+                        Text('${r.members}',
+                            style: TextStyle(
+                                fontSize: 11, color: scheme.onSurfaceVariant)),
+                      ],
+                      if (r.last != null && _unread(r.last!))
+                        Container(
+                          margin: const EdgeInsets.only(left: 8),
+                          width: 7,
+                          height: 7,
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: LuxeColors.brand,
+                          ),
                         ),
                     ],
                   ),
@@ -515,9 +568,83 @@ class ChatsTabState extends State<ChatsTab> {
     );
   }
 
+  /// Новое сообщение, ещё не прочитанное.
+  bool _unread(Map<String, dynamic> last) =>
+      last['sender_id'] != AuthService.myId && last['status'] != 'read';
+
+  /// Превью строки списка.
+  ///
+  /// У медиа вместо нормального текста в базе лежит имя файла или
+  /// ссылка. Раньше в списке это выглядело как «Вы: scaled_10000.webp»
+  /// или вовсе «Вы: .» — отсюда пустые строки у картинок.
+  String _preview(String? raw, _Row r) {
+    final type = r.last?['type'];
+    if (type != null && type != 'text') {
+      return switch (type) {
+        'image' => 'Фотография',
+        'video' => 'Видео',
+        'voice' => 'Голосовое сообщение',
+        'circle' => 'Кружок',
+        'sticker' => 'Стикер',
+        'file' => _fileName(raw),
+        _ => raw ?? '',
+      };
+    }
+    final t = raw?.trim() ?? '';
+    if (t.isEmpty || t.length < 2) {
+      return r.kind == 'channel'
+          ? 'Канал'
+          : r.kind == 'group'
+              ? 'Группа'
+              : 'Начните переписку';
+    }
+    return t;
+  }
+
+  /// Понятное название вместо служебного «scaled_1000047539.webp».
+  String _fileName(String? raw) {
+    if (raw == null || raw.isEmpty || raw.startsWith('http')) return 'Файл';
+    if (!RegExp(r'^(scaled|image_picker|file_picker|media)_').hasMatch(raw)) {
+      return raw;
+    }
+    final dot = raw.lastIndexOf('.');
+    if (dot <= 0) return 'Файл';
+    return switch (raw.substring(dot + 1).toLowerCase()) {
+      'jpg' || 'jpeg' || 'png' || 'webp' || 'gif' => 'Фотография',
+      'mp4' || 'mov' => 'Видео',
+      'm4a' || 'mp3' || 'wav' || 'aac' => 'Голосовое',
+      _ => 'Файл',
+    };
+  }
+
+  /// Время в строке списка: сегодня — часами, вчера — «вчера»,
+/// дальше — датой.
+///
+/// Раньше здесь стоял timeago, но он печатал английское «3 days ago» —
+/// в русском интерфейсе это выглядело как недоделка.
+  String _when(String iso) {
+    final d = DateTime.parse(iso).toLocal();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(d.year, d.month, d.day);
+    final diff = today.difference(day).inDays;
+    if (diff == 0) {
+      return '${d.hour.toString().padLeft(2, '0')}:'
+          '${d.minute.toString().padLeft(2, '0')}';
+    }
+    if (diff == 1) return 'вчера';
+    if (d.year == now.year) {
+      return '${d.day.toString().padLeft(2, '0')}.'
+          '${d.month.toString().padLeft(2, '0')}';
+    }
+    return '${d.day.toString().padLeft(2, '0')}.'
+        '${d.month.toString().padLeft(2, '0')}.${d.year % 100}';
+  }
+
   Widget _avatar(_Row r) {
-    if (r.avatar != null && r.avatar!.isNotEmpty) {
-      return CircleAvatar(radius: 23, backgroundImage: NetworkImage(r.avatar!));
+    final url = MediaService.fixUrl(r.avatar);
+    if (url != null && url.isNotEmpty) {
+      return CircleAvatar(radius: 23, backgroundImage: NetworkImage(url));
     }
     if (r.kind == 'channel') {
       return Container(
@@ -525,11 +652,9 @@ class ChatsTabState extends State<ChatsTab> {
         height: 46,
         decoration: const BoxDecoration(
           shape: BoxShape.circle,
-          gradient: LinearGradient(
-              colors: [LuxeColors.tgBlue, Color(0xFF7A5AF8)]),
+          color: LuxeColors.brand,
         ),
-        child: const Icon(Icons.campaign_rounded,
-            color: Colors.white, size: 22),
+        child: const Icon(Icons.campaign_rounded, color: Colors.white, size: 21),
       );
     }
     if (r.kind == 'group') {
@@ -540,15 +665,12 @@ class ChatsTabState extends State<ChatsTab> {
           shape: BoxShape.circle,
           gradient: avatarGradient(r.title),
         ),
-        child: const Icon(Icons.group_rounded,
-            color: Colors.white, size: 22),
+        child: const Icon(Icons.group_rounded, color: Colors.white, size: 21),
       );
     }
     return GradientAvatar(name: r.title, radius: 23);
   }
 }
-
-/// Колонка «Каналы»: только каналы из списка чатов.
 class ChannelsTab extends StatelessWidget {
   final void Function(Map<String, dynamic> chat) onOpen;
   const ChannelsTab({super.key, required this.onOpen});

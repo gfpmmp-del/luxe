@@ -491,15 +491,46 @@ class ChatService {
       .neq('status', 'read');
   }
 
+  /// Поиск людей по имени пользователя или отображаемому имени.
+  ///
+  /// Раньше искалось только по username, и человек по имени «Макс»
+  /// не находился, хотя в приложении он подписан как «Макс». Теперь
+  /// смотрим оба поля — искать людей стало действительно удобно.
   static Future<List<Map<String, dynamic>>> searchUsers(String query) async {
-    if (query.trim().isEmpty) return [];
-    final rows = await supabase
-        .from('profiles')
-        .select('id, username, display_name, status, avatar_url, verified')
-        .ilike('username', '%${query.trim().toLowerCase()}%')
-        .limit(20);
-    return ((rows as List).cast<Map<String, dynamic>>())
-        .where((u) => u['id'] != AuthService.myId)
-        .toList();
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return [];
+    try {
+      final rows = await supabase
+          .from('profiles')
+          .select('id, username, display_name, status, avatar_url, verified')
+          .or('username.ilike.%$q%,display_name.ilike.%$q%')
+          .order('username')
+          .limit(30)
+          .timeout(const Duration(seconds: 12));
+      return ((rows as List).cast<Map<String, dynamic>>())
+          .where((u) => u['id'] != AuthService.myId)
+          .toList();
+    } catch (e) {
+      debugPrint('Поиск людей не отработал: $e');
+      return [];
+    }
+  }
+
+  /// Поиск групп и каналов по названию.
+  static Future<List<Map<String, dynamic>>> searchGroups(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return [];
+    try {
+      final rows = await supabase
+          .from('chats')
+          .select('id, title, avatar_url, kind')
+          .ilike('title', '%$q%')
+          .limit(30)
+          .timeout(const Duration(seconds: 12));
+      return (rows as List).cast<Map<String, dynamic>>();
+    } catch (e) {
+      debugPrint('Поиск групп не отработал: $e');
+      return [];
+    }
   }
 }

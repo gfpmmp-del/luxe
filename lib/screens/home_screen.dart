@@ -11,7 +11,7 @@ import '../widgets/luxe_widgets.dart';
 import 'call_screen.dart';
 import 'calls_tab.dart';
 import 'chats_tab.dart';
-import 'contacts_tab.dart';
+import 'global_search_screen.dart';
 import 'settings_tab.dart';
 import 'split_chat_screen.dart';
 
@@ -86,6 +86,30 @@ class _HomeScreenState extends State<HomeScreen> {
         infoOpen = false;
       });
 
+  /// Открыть чат по id — из поиска, где полной строки чата нет.
+  Future<void> _openChatById(String id) async {
+    try {
+      final rows = await supabase
+          .from('chats')
+          .select('id, kind, title, avatar_url, is_group, created_at')
+          .eq('id', id)
+          .maybeSingle();
+      if (rows == null) {
+        _toast('Чат не найден');
+        return;
+      }
+      await _openChat(Map<String, dynamic>.from(rows as Map));
+    } catch (e) {
+      _toast('Не удалось открыть чат');
+    }
+  }
+
+  void _toast(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(text)));
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, box) {
@@ -144,7 +168,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _listColumn() {
     switch (index) {
       case 1:
-        return ContactsTab(onChanged: () => chatsKey.currentState?.reload());
+        // Поиск людей и групп. Отдельной вкладки «Контакты» больше нет:
+        // искать можно прямо из списка чатов, это быстрее.
+        return GlobalSearchScreen(onOpenChat: (id) => _openChatById(id));
       case 2:
         return ChannelsTab(onOpen: _openChat);
       case 3:

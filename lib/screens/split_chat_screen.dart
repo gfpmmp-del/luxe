@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:url_launcher/url_launcher.dart';
@@ -528,7 +528,7 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
             child: Container(
               color: isChannel
                   ? bg
-                  : (dark ? LuxeColors.darkBg : const Color(0xFFE7EBF0)),
+                  : (dark ? LuxeColors.darkBg : LuxeColors.lightBg),
               child: LayoutBuilder(
                 builder: (context, box) => ListView.builder(
                 controller: scroll,
@@ -1193,7 +1193,7 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
                 decoration: const BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: LinearGradient(
-                      colors: [LuxeColors.tgBlue, Color(0xFF7A5AF8)]),
+                      colors: [LuxeColors.brand, Color(0xFF8A93D8)]),
                 ),
                 child: const Icon(Icons.campaign_rounded,
                     color: Colors.white, size: 15),
@@ -1212,7 +1212,7 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
                     locale: 'ru'),
                 style: TextStyle(
                     fontSize: 11,
-                    color: dark ? Colors.white54 : Colors.black45),
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
               ),
             ],
           ),

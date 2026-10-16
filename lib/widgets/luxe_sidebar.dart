@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../services/auth_service.dart';
+import '../services/media_service.dart';
 import '../services/premium_service.dart';
 import '../theme/luxe_theme.dart';
+import '../screens/chats_tab.dart';
 import '../widgets/luxe_widgets.dart';
 
 /// Тёмная левая колонка с навигацией (как в Telegram Desktop).
@@ -19,48 +21,65 @@ class LuxeSidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Раньше панель была всегда чёрной: в светлой теме она выглядела
+    // как дыра рядом со спокойным белым списком чатов.
+    final isDark = scheme.brightness == Brightness.dark;
     return Container(
       width: 68,
-      color: LuxeColors.sideBar,
-      child: Column(
-        children: [
-          // Бургер
-          _sbItem(Icons.menu_rounded, selected: false, onTap: onMenu),
-          const Divider(color: Colors.white12, height: 1),
-          // Чаты с бейджем
-          _sbItem(
-            Icons.chat_bubble_rounded,
-            selected: index == 0,
-            badge: '5',
-            onTap: () => onSelect(0),
-          ),
-          // Каналы
-          _sbItem(Icons.campaign_rounded,
-              selected: index == 2, onTap: () => onSelect(2)),
-          // Контакты
-          _sbItem(Icons.contacts_rounded,
-              selected: index == 1, onTap: () => onSelect(1)),
-          // Звонки
-          _sbItem(Icons.call_rounded,
-              selected: index == 3, onTap: () => onSelect(3)),
-          const Spacer(),
-          // Настройки
-          _sbItem(Icons.settings_rounded,
-              selected: index == 4, onTap: () => onSelect(4)),
-          const SizedBox(height: 12),
-        ],
+      color: isDark ? LuxeColors.darkCard : LuxeColors.lightPanel,
+      child: ValueListenableBuilder<int>(
+        valueListenable: ChatsTab.unread,
+        builder: (_, count, __) => Column(
+          children: [
+            _sbItem(Icons.menu_rounded,
+                scheme: scheme, selected: false, onTap: onMenu),
+            Divider(color: scheme.outlineVariant, height: 1),
+            // Чаты с числом непрочитанных
+            _sbItem(
+              Icons.chat_bubble_rounded,
+              scheme: scheme,
+              selected: index == 0,
+              badge: count == 0 ? null : '$count',
+              onTap: () => onSelect(0),
+            ),
+            _sbItem(Icons.campaign_rounded,
+                scheme: scheme,
+                selected: index == 2,
+                onTap: () => onSelect(2)),
+            // Поиск людей и групп. Отдельная вкладка «Контакты» больше
+            // не нужна: искать людей удобнее прямо из списка чатов.
+            _sbItem(Icons.search_rounded,
+                scheme: scheme,
+                selected: index == 1,
+                onTap: () => onSelect(1)),
+            _sbItem(Icons.call_rounded,
+                scheme: scheme,
+                selected: index == 3,
+                onTap: () => onSelect(3)),
+            const Spacer(),
+            _sbItem(Icons.settings_rounded,
+                scheme: scheme,
+                selected: index == 4,
+                onTap: () => onSelect(4)),
+            const SizedBox(height: 12),
+          ],
+        ),
       ),
     );
   }
 
   Widget _sbItem(IconData icon,
-      {required bool selected,
+      {required ColorScheme scheme,
+      required bool selected,
       required VoidCallback onTap,
       String? badge}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
       child: Material(
-        color: selected ? LuxeColors.sideBarActive : Colors.transparent,
+        color: selected
+            ? LuxeColors.brand.withValues(alpha: 0.14)
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
@@ -71,7 +90,9 @@ class LuxeSidebar extends StatelessWidget {
               alignment: Alignment.center,
               children: [
                 Icon(icon,
-                    color: selected ? Colors.white : Colors.white70,
+                    color: selected
+                        ? LuxeColors.brand
+                        : scheme.onSurfaceVariant,
                     size: 24),
                 if (badge != null)
                   Positioned(
@@ -116,18 +137,19 @@ class LuxeDrawer extends StatelessWidget {
   Widget build(BuildContext context) {
     final name = (profile?['display_name'] ?? '...') as String;
     final username = (profile?['username'] ?? '') as String;
-    final avatar = profile?['avatar_url'] as String?;
+    final avatar = MediaService.fixUrl(profile?['avatar_url'] as String?);
     final email = supabase.auth.currentUser?.email ?? '';
+    final scheme = Theme.of(context).colorScheme;
 
     final items = [
       (Icons.chat_bubble_rounded, 'Чаты', 0),
-      (Icons.contacts_rounded, 'Контакты', 1),
+      (Icons.search_rounded, 'Поиск', 1),
       (Icons.call_rounded, 'Звонки', 3),
       (Icons.settings_rounded, 'Настройки', 4),
     ];
 
     return Drawer(
-      backgroundColor: LuxeColors.sideBar,
+      backgroundColor: scheme.surface,
       child: ListView(
         padding: EdgeInsets.zero,
         children: [
@@ -147,8 +169,8 @@ class LuxeDrawer extends StatelessWidget {
                           Flexible(
                             child: Text(name,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    color: Colors.white,
+                                style: TextStyle(
+                                    color: scheme.onSurface,
                                     fontSize: 16,
                                     fontWeight: FontWeight.bold)),
                           ),
@@ -159,11 +181,13 @@ class LuxeDrawer extends StatelessWidget {
                         ],
                       ),
                       Text('@$username',
-                          style:
-                              const TextStyle(color: Colors.white60, fontSize: 13)),
+                          style: TextStyle(
+                              color: scheme.onSurfaceVariant, fontSize: 13)),
                       Text(email,
-                          style: const TextStyle(
-                              color: Colors.white38, fontSize: 11)),
+                          style: TextStyle(
+                              color: scheme.onSurfaceVariant
+                                  .withValues(alpha: 0.7),
+                              fontSize: 11)),
                     ],
                   ),
                 ),
@@ -175,12 +199,14 @@ class LuxeDrawer extends StatelessWidget {
             final selected = index == it.$3;
             return ListTile(
               leading: Icon(it.$1,
-                  color: selected ? LuxeColors.tgBlue : Colors.white70),
+                  color: selected
+                      ? LuxeColors.brand
+                      : scheme.onSurfaceVariant),
               title: Text(it.$2,
                   style: TextStyle(
-                      color: selected ? LuxeColors.tgBlue : Colors.white,
+                      color: selected ? LuxeColors.brand : scheme.onSurface,
                       fontWeight:
-                          selected ? FontWeight.bold : FontWeight.normal)),
+                          selected ? FontWeight.w600 : FontWeight.normal)),
               selected: selected,
               onTap: () {
                 onSelect(it.$3);
@@ -188,12 +214,12 @@ class LuxeDrawer extends StatelessWidget {
               },
             );
           }),
-          const Divider(color: Colors.white12),
+          Divider(color: scheme.outlineVariant),
           ListTile(
             leading: const Icon(Icons.person_add_alt_1,
-                color: LuxeColors.tgBlue),
-            title: const Text('Пригласить друзей',
-                style: TextStyle(color: Colors.white)),
+                color: LuxeColors.brand),
+            title: Text('Пригласить друзей',
+                style: TextStyle(color: scheme.onSurface)),
             onTap: () => Navigator.pop(context),
           ),
           ListTile(
