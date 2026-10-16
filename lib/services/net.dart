@@ -106,19 +106,21 @@ class Net {
 
   /// Выбрать адрес, который реально работает в этой сети.
   ///
-  /// Сети бывают разные: где-то режут прямой адрес Supabase, где-то
-  /// неожиданно душат Cloudflare. Поэтому пробуем оба и берём тот,
-  /// что ответил. Возвращает null, если не отвечает ни один.
+  /// Сначала пробуем прямой адрес Supabase: он надёжнее, быстрее и
+  /// не гонит трафик через посредника. Cloudflare оставляем запасным
+  /// путём для сетей, которые режут сам Supabase — там прямой адрес
+  /// не ответит, и воркер выручит.
   static Future<String?> pickUrl() async {
     if (!SupabaseConfig.viaProxy) return SupabaseConfig.url;
-    if (await probeBase(SupabaseConfig.workerUrl)) {
-      debugPrint('Работает прокси: ${SupabaseConfig.workerUrl}');
-      return SupabaseConfig.workerUrl;
-    }
-    debugPrint('Прокси не отвечает, пробуем напрямую');
+
     if (await probeBase(SupabaseConfig.directUrl)) {
       debugPrint('Работает напрямую: ${SupabaseConfig.directUrl}');
       return SupabaseConfig.directUrl;
+    }
+    debugPrint('Прямой адрес не отвечает, пробуем прокси');
+    if (await probeBase(SupabaseConfig.workerUrl)) {
+      debugPrint('Работает через прокси: ${SupabaseConfig.workerUrl}');
+      return SupabaseConfig.workerUrl;
     }
     return null;
   }
