@@ -42,7 +42,7 @@ class ChatService {
     // Сеть без VPN рвёт соединение на первой же попытке. Повтор
     // с паузой чинит почти все такие случаи — дешевле, чем ругаться
     // пользователю на пустой список.
-    return Net.retry(() => _chatListDataOnce(myId), attempts: 3);
+    return Net.retry(() => _chatListDataOnce(myId), attempts: 2);
   }
 
   static Future<ChatListData> _chatListDataOnce(String myId) async {
@@ -50,7 +50,7 @@ class ChatService {
         .from('chat_members')
         .select('chat_id')
         .eq('user_id', myId)
-        .timeout(const Duration(seconds: 15));
+        .timeout(const Duration(seconds: 10));
     final chatIds = (memberRows as List)
         .map((e) => e['chat_id'] as String)
         .toSet()
@@ -64,7 +64,7 @@ class ChatService {
         .select('id, kind, title, avatar_url, is_group, created_at')
         .inFilter('id', chatIds)
         .order('created_at', ascending: false)
-        .timeout(const Duration(seconds: 15));
+        .timeout(const Duration(seconds: 10));
 
     // Все участники моих чатов одним запросом: отсюда же считаем
     // количество участников и находим собеседника в личном чате.
@@ -74,7 +74,7 @@ class ChatService {
         .from('chat_members')
         .select('chat_id, user_id')
         .inFilter('chat_id', chatIds)
-        .timeout(const Duration(seconds: 15));
+        .timeout(const Duration(seconds: 10));
     for (final r in (memberAll as List).cast<Map<String, dynamic>>()) {
       final cid = r['chat_id'] as String;
       final uid = r['user_id'] as String;

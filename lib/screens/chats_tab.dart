@@ -67,10 +67,10 @@ class ChatsTabState extends State<ChatsTab> {
       loadError = null;
     });
     try {
-      // Страховка от вечного спиннера: любой запрос, который зависнет
-      // на слабой сети, обрывается по таймауту, а чаты показываются
-      // хотя бы частично.
-      await _loadRows().timeout(const Duration(seconds: 25));
+      // Короткий потолок: пользователь не должен минуту смотреть
+      // на спиннер и считать приложение сломанным. Лучше быстро
+      // показать ошибку и дать кнопку «Повторить».
+      await _loadRows().timeout(const Duration(seconds: 18));
     } on TimeoutException {
       debugPrint('Список чатов не успел загрузиться');
       if (mounted) {
