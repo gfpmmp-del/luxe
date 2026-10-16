@@ -67,8 +67,6 @@ class _LuxeAppState extends State<LuxeApp> {
     });
 
     // Пробуем оба адреса и берём тот, что отвечает в этой сети.
-    // Где-то режут прямой адрес Supabase, где-то душат Cloudflare —
-    // приложение не должно гадать, оно просто находит рабочий путь.
     var picked = await Net.pickUrl();
     if (picked == null) {
       for (var i = 0; i < 2 && picked == null; i++) {
@@ -77,15 +75,14 @@ class _LuxeAppState extends State<LuxeApp> {
       }
     }
 
+    // Проверка не прошла — это ещё не значит, что работать нельзя.
+    // Проверка может не успеть по таймауту на медленной сети, а обычные
+    // запросы пройдут. Раньше здесь приложение просто не пускало внутрь,
+    // и человек видел «не удаётся связаться», хотя сеть была в порядке.
+    // Лучше войти и дать списку чатов показать свою ошибку с повтором.
     if (picked == null) {
-      if (!mounted) return;
-      setState(() {
-        _checking = false;
-        _error = 'Не удаётся связаться с сервером.\n\n'
-            'Сеть блокирует доступ или сильно его ограничивает. '
-            'Попробуйте мобильный интернет или другую сеть.';
-      });
-      return;
+      picked = SupabaseConfig.directUrl;
+      debugPrint('Ни один адрес не подтвердился, идём на прямой');
     }
     SupabaseConfig.picked = picked;
     debugPrint('Рабочий адрес сервера: $picked');
@@ -111,9 +108,6 @@ class _LuxeAppState extends State<LuxeApp> {
     setState(() {
       _checking = false;
       _ready = true;
-      _offline = picked == SupabaseConfig.workerUrl
-          ? false
-          : false; // адрес уже проверен, офлайн-полоса не нужна
     });
   }
 
