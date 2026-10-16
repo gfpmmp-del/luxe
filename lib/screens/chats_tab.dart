@@ -84,7 +84,7 @@ class ChatsTabState extends State<ChatsTab> {
       if (mounted) {
         // Текст ошибки показываем на экране: иначе по телефону
         // невозможно понять, сеть виновата или сама база.
-        loadError = Net.humanError(e);
+        loadError = _describe(e);
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(loadError!)));
       }
@@ -97,6 +97,20 @@ class ChatsTabState extends State<ChatsTab> {
         });
       }
     }
+  }
+
+  /// Понятный текст ошибки.
+  ///
+  /// Свой текст из сервиса важно показать как есть: там названо, какой
+  /// именно запрос не ответил. Через Net.humanError это имя потерялось бы,
+  /// и мы бы снова гадали, где затык.
+  String _describe(Object e) {
+    final raw = e.toString();
+    final named = RegExp(r'«(.+?)»').firstMatch(raw);
+    if (named != null) {
+      return 'Не отвечает запрос: ${named.group(1)}';
+    }
+    return Net.humanError(e);
   }
 
   Future<void> _loadRows() async {

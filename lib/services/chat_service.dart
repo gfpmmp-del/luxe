@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import '../main.dart';
@@ -45,12 +47,24 @@ class ChatService {
     return Net.retry(() => _chatListDataOnce(myId), attempts: 2);
   }
 
+  /// Запрос с понятным названием.
+  ///
+  /// Без этого при зависании непонятно, где именно: сообщение «Сервер не
+  /// отвечает» одинаково и для списка чатов, и для профилей. А по названию
+  /// видно конкретный запрос и можно бить точно.
+  static Future<T> _query<T>(Future<T> Function() builder, String name) async {
+    try {
+      return await builder().timeout(const Duration(seconds: 10));
+    } on TimeoutException {
+      throw Exception('Запрос «$name» не ответил за 10 секунд');
+    }
+  }
+
   static Future<ChatListData> _chatListDataOnce(String myId) async {
-    final memberRows = await supabase
-        .from('chat_members')
-        .select('chat_id')
-        .eq('user_id', myId)
-        .timeout(const Duration(seconds: 10));
+    final memberRows = await _query(
+      () => supabase.from('chat_members').select('chat_id').eq('user_id', myId),
+      'список чатов',
+    );
     final chatIds = (memberRows as List)
         .map((e) => e['chat_id'] as String)
         .toSet()
@@ -59,22 +73,26 @@ class ChatService {
       return const ChatListData([], {}, {});
     }
 
-    final chats = await supabase
-        .from('chats')
-        .select('id, kind, title, avatar_url, is_group, created_at')
-        .inFilter('id', chatIds)
-        .order('created_at', ascending: false)
-        .timeout(const Duration(seconds: 10));
+    final chats = await _query(
+      () => supabase
+          .from('chats')
+          .select('id, kind, title, avatar_url, is_group, created_at')
+          .inFilter('id', chatIds)
+          .order('created_at', ascending: false),
+      'данные чатов',
+    );
 
     // Все участники моих чатов одним запросом: отсюда же считаем
     // количество участников и находим собеседника в личном чате.
     final membersByChat = <String, List<String>>{};
     final allUserIds = <String>{};
-    final memberAll = await supabase
-        .from('chat_members')
-        .select('chat_id, user_id')
-        .inFilter('chat_id', chatIds)
-        .timeout(const Duration(seconds: 10));
+    final memberAll = await _query(
+      () => supabase
+          .from('chat_members')
+          .select('chat_id, user_id')
+          .inFilter('chat_id', chatIds),
+      'участники чатов',
+    );
     for (final r in (memberAll as List).cast<Map<String, dynamic>>()) {
       final cid = r['chat_id'] as String;
       final uid = r['user_id'] as String;
@@ -82,7 +100,10 @@ class ChatService {
       allUserIds.add(uid);
     }
 
-    final profiles = await profilesByIds(allUserIds.toList());
+    final profiles = await _query(
+      () => profilesByIds(allUserIds.toList()),
+      'профили людей',
+    );
     return ChatListData(
         (chats as List).cast<Map<String, dynamic>>(), membersByChat, profiles);
   }
@@ -97,16 +118,15 @@ class ChatService {
     for (var i = 0; i < ids.length; i += chunkSize) {
       final end =
           (i + chunkSize) > ids.length ? ids.length : (i + chunkSize);
-      try {
-        final rows = await supabase
+      final rows = await _query(
+        () => supabase
             .from('profiles')
             .select('id, display_name, username, avatar_url, verified, status')
-            .inFilter('id', ids.sublist(i, end));
-        for (final r in (rows as List).cast<Map<String, dynamic>>()) {
-          out[r['id'] as String] = r;
-        }
-      } catch (e) {
-        debugPrint('Профили не загрузились: $e');
+            .inFilter('id', ids.sublist(i, end)),
+        'профили людей',
+      );
+      for (final r in (rows as List).cast<Map<String, dynamic>>()) {
+        out[r['id'] as String] = r;
       }
     }
     return out;
