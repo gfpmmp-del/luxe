@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import '../main.dart';
 import 'auth_service.dart';
 import 'media_service.dart';
+import 'net.dart';
 
 /// Всё нужное для списка чатов, собранное фиксированным числом запросов.
 class ChatListData {
@@ -38,10 +39,18 @@ class ChatService {
   /// грузился минутами либо зависал навсегда.
   static Future<ChatListData> chatListData() async {
     final myId = AuthService.myId;
+    // Сеть без VPN рвёт соединение на первой же попытке. Повтор
+    // с паузой чинит почти все такие случаи — дешевле, чем ругаться
+    // пользователю на пустой список.
+    return Net.retry(() => _chatListDataOnce(myId), attempts: 3);
+  }
+
+  static Future<ChatListData> _chatListDataOnce(String myId) async {
     final memberRows = await supabase
         .from('chat_members')
         .select('chat_id')
-        .eq('user_id', myId);
+        .eq('user_id', myId)
+        .timeout(const Duration(seconds: 15));
     final chatIds = (memberRows as List)
         .map((e) => e['chat_id'] as String)
         .toSet()
@@ -54,7 +63,8 @@ class ChatService {
         .from('chats')
         .select('id, kind, title, avatar_url, is_group, created_at')
         .inFilter('id', chatIds)
-        .order('created_at', ascending: false);
+        .order('created_at', ascending: false)
+        .timeout(const Duration(seconds: 15));
 
     // Все участники моих чатов одним запросом: отсюда же считаем
     // количество участников и находим собеседника в личном чате.
@@ -63,7 +73,8 @@ class ChatService {
     final memberAll = await supabase
         .from('chat_members')
         .select('chat_id, user_id')
-        .inFilter('chat_id', chatIds);
+        .inFilter('chat_id', chatIds)
+        .timeout(const Duration(seconds: 15));
     for (final r in (memberAll as List).cast<Map<String, dynamic>>()) {
       final cid = r['chat_id'] as String;
       final uid = r['user_id'] as String;

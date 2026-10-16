@@ -5,6 +5,7 @@ import 'package:timeago/timeago.dart' as timeago;
 import '../main.dart';
 import '../services/auth_service.dart';
 import '../services/chat_service.dart';
+import '../services/net.dart';
 import '../theme/luxe_theme.dart';
 import '../widgets/luxe_widgets.dart';
 import '../widgets/verified_badge.dart';
@@ -43,6 +44,7 @@ class ChatsTabState extends State<ChatsTab> {
   String filter = 'all';
   bool loading = true;
   bool loadFailed = false;
+  String? loadError;
   final searchCtrl = TextEditingController();
 
   static const filters = [
@@ -62,6 +64,7 @@ class ChatsTabState extends State<ChatsTab> {
     setState(() {
       loading = true;
       loadFailed = false;
+      loadError = null;
     });
     try {
       // Страховка от вечного спиннера: любой запрос, который зависнет
@@ -69,19 +72,21 @@ class ChatsTabState extends State<ChatsTab> {
       // хотя бы частично.
       await _loadRows().timeout(const Duration(seconds: 25));
     } on TimeoutException {
-      debugPrint('Список чатов не успел загрузиться за 25 секунд');
+      debugPrint('Список чатов не успел загрузиться');
       if (mounted) {
+        loadError = 'Сервер не отвечает. Сеть, похоже, его душит.';
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Сеть не отвечает. Нажмите «Повторить»')),
+          const SnackBar(content: Text('Сервер не отвечает. Нажмите «Повторить»')),
         );
       }
     } catch (e) {
       debugPrint('Список чатов не загрузился: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Не удалось загрузить чаты: $e')),
-        );
+        // Текст ошибки показываем на экране: иначе по телефону
+        // невозможно понять, сеть виновата или сама база.
+        loadError = Net.humanError(e);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(loadError!)));
       }
     } finally {
       // Без finally спиннер крутился бы вечно при любой ошибке сети
@@ -352,7 +357,8 @@ class ChatsTabState extends State<ChatsTab> {
                     ? EmptyState(
                         icon: Icons.cloud_off_rounded,
                         title: 'Не удалось загрузить чаты',
-                        subtitle: 'Проверьте подключение к интернету.',
+                        subtitle: loadError ??
+                            'Проверьте подключение к интернету.',
                         accent: LuxeColors.tgBlue,
                       )
                     : list.isEmpty
