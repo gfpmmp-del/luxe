@@ -70,24 +70,57 @@ class Net {
   /// Проверяем не только вход, но и запрос к базе. Раньше проверялся
   /// только /auth/v1 — он отвечал, а /rest/v1 висел, и приложение
   /// считало сеть исправной.
-  static Future<bool> probeRest() async {
+  static Future<bool> probeRest() => probeBase(SupabaseConfig.url);
+
+  /// Проверить конкретный адрес: и вход, и запрос к базе.
+  ///
+  /// Нужен оба: /auth/v1 отвечает быстро даже там, где /rest/v1
+  /// зависает, и по нему одному судить о сети нельзя.
+  static Future<bool> probeBase(String base) async {
     final client = buildClient();
     try {
-      final res = await client
+      final auth = await client
           .get(
-            Uri.parse('${SupabaseConfig.url}/rest/v1/chat_members'
+            Uri.parse('$base/auth/v1/health?apikey=${SupabaseConfig.anonKey}'),
+            headers: {'apikey': SupabaseConfig.anonKey},
+          )
+          .timeout(connectTimeout);
+      if (auth.statusCode >= 500) return false;
+
+      final rest = await client
+          .get(
+            Uri.parse('$base/rest/v1/chat_members'
                 '?select=chat_id&limit=1'
                 '&apikey=${SupabaseConfig.anonKey}'),
             headers: {'apikey': SupabaseConfig.anonKey},
           )
           .timeout(connectTimeout);
       // Пустой массив — это успех: база ответила, просто строк нет.
-      return res.statusCode < 500;
+      return rest.statusCode < 500;
     } catch (_) {
       return false;
     } finally {
       client.close();
     }
+  }
+
+  /// Выбрать адрес, который реально работает в этой сети.
+  ///
+  /// Сети бывают разные: где-то режут прямой адрес Supabase, где-то
+  /// неожиданно душат Cloudflare. Поэтому пробуем оба и берём тот,
+  /// что ответил. Возвращает null, если не отвечает ни один.
+  static Future<String?> pickUrl() async {
+    if (!SupabaseConfig.viaProxy) return SupabaseConfig.url;
+    if (await probeBase(SupabaseConfig.workerUrl)) {
+      debugPrint('Работает прокси: ${SupabaseConfig.workerUrl}');
+      return SupabaseConfig.workerUrl;
+    }
+    debugPrint('Прокси не отвечает, пробуем напрямую');
+    if (await probeBase(SupabaseConfig.directUrl)) {
+      debugPrint('Работает напрямую: ${SupabaseConfig.directUrl}');
+      return SupabaseConfig.directUrl;
+    }
+    return null;
   }
 
   /// Повторить операцию с нарастающей паузой.

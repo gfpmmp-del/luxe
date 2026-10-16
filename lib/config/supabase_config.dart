@@ -24,10 +24,24 @@ class SupabaseConfig {
   /// Переопределение при сборке. Пусто — берётся workerUrl.
   static const String _override = String.fromEnvironment('SUPABASE_URL');
 
-  static String get url => _override.isNotEmpty ? _override : workerUrl;
+  /// Адрес, выбранный при запуске.
+  ///
+  /// Сеть может резать прямой адрес Supabase, а может душить Cloudflare —
+  /// приложение проверяет оба и работает через тот, что отвечает.
+  static String? picked;
+
+  static String get url => _override.isNotEmpty
+      ? _override
+      : (picked ?? workerUrl);
 
   /// Идём через прокси? От этого зависит текст ошибок в приложении.
-  static bool get viaProxy => url == workerUrl;
+  static bool get viaProxy => _override.isEmpty && url == workerUrl;
+
+  /// Короткое название маршрута для настроек.
+  static String get routeName {
+    if (_override.isNotEmpty) return 'вручную';
+    return url == workerUrl ? 'через Cloudflare' : 'напрямую';
+  }
 
   static const String anonKey = 'sb_publishable_AC4IUfDWKTpiqDForg49ig_KrJ2ZbAp';
 }

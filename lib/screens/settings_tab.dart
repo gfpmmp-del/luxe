@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../main.dart';
+import '../config/supabase_config.dart';
 import '../services/auth_service.dart';
 import '../services/media_service.dart';
 import '../services/premium_service.dart';
@@ -339,7 +340,9 @@ class SettingsTabState extends State<SettingsTab> {
                 leading:
                     const Icon(Icons.info_outline, color: LuxeColors.tgBlue),
                 title: const Text('О Luxe'),
-                subtitle: const Text('Версия 1.0 • Flutter + Supabase'),
+                subtitle: Text(
+                    'Версия 1.0 • Flutter + Supabase\n'
+                    'Сервер: ${SupabaseConfig.routeName}'),
                 onTap: () => showAboutDialog(
                   context: context,
                   applicationName: 'Luxe',

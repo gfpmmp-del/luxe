@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'config/supabase_config.dart';
-import 'screens/auth_screen.dart';
-import 'screens/home_screen.dart';
+import 'screens/auth_screen.dart';import 'screens/home_screen.dart';
 import 'services/net.dart';
 import 'theme/luxe_theme.dart';
 
@@ -46,23 +45,33 @@ class _LuxeAppState extends State<LuxeApp> {
       _error = null;
     });
 
-    // Сначала спрашиваем сервер напрямую: это быстрее и понятнее, чем
-    // смотреть на бесконечную инициализацию клиента.
-    var reachable = false;
-    for (var i = 0; i < 3 && !reachable; i++) {
-      reachable = await Net.reachable();
-      if (!reachable) {
-        await Future.delayed(Duration(milliseconds: 500 * (i + 1)));
+    // Пробуем оба адреса и берём тот, что отвечает в этой сети.
+    // Где-то режут прямой адрес Supabase, где-то душат Cloudflare —
+    // приложение не должно гадать, оно просто находит рабочий путь.
+    var picked = await Net.pickUrl();
+    if (picked == null) {
+      for (var i = 0; i < 2 && picked == null; i++) {
+        await Future.delayed(Duration(milliseconds: 700 * (i + 1)));
+        picked = await Net.pickUrl();
       }
     }
 
-    // Даже когда сервер не отвечает, клиент инициализируем: он умеет
-    // отдать сохранённую сессию и последние данные из кэша. Запирать
-    // человека в экране ошибки, когда у него в телефоне лежит история
-    // переписки, — плохая идея.
+    if (picked == null) {
+      if (!mounted) return;
+      setState(() {
+        _checking = false;
+        _error = 'Не удаётся связаться с сервером.\n\n'
+            'Сеть блокирует доступ или сильно его ограничивает. '
+            'Попробуйте мобильный интернет или другую сеть.';
+      });
+      return;
+    }
+    SupabaseConfig.picked = picked;
+    debugPrint('Рабочий адрес сервера: $picked');
+
     try {
       await Supabase.initialize(
-        url: SupabaseConfig.url,
+        url: picked,
         publishableKey: SupabaseConfig.anonKey,
         // Клиент с таймаутами: запрос не должен висеть минутами.
         httpClient: Net.buildClient(),
@@ -71,19 +80,19 @@ class _LuxeAppState extends State<LuxeApp> {
       if (!mounted) return;
       setState(() {
         _checking = false;
-        _error = reachable
-            ? 'Сервер ответил, но данные не загрузились:\n${Net.humanError(e)}'
-            : 'Не удаётся связаться с сервером.\n\n'
-                'Сеть блокирует доступ или сильно его ограничивает. '
-                'Попробуйте мобильный интернет или другую сеть.';
+        _error = 'Сервер ответил, но данные не загрузились:\n'
+            '${Net.humanError(e)}';
       });
       return;
     }
+
     if (!mounted) return;
     setState(() {
       _checking = false;
       _ready = true;
-      _offline = !reachable;
+      _offline = picked == SupabaseConfig.workerUrl
+          ? false
+          : false; // адрес уже проверен, офлайн-полоса не нужна
     });
   }
 
