@@ -72,6 +72,31 @@ flutter build windows --release --dart-define=SUPABASE_URL=https://luxe-proxy.<�
 `lib/config/supabase_config.dart`, поле `_proxyUrl`, тогда `--dart-define`
 не понадобится.
 
+## Статус
+
+Прокси развёрнут и работает: `https://luxe-proxy.gfpmmp.workers.dev`
+
+Адрес **вшит в приложение по умолчанию** (`lib/config/supabase_config.dart`,
+`workerUrl`), поэтому `--dart-define` больше не нужен. Ответы Supabase
+идут как раньше, меняется только домен в цепочке.
+
+Если Worker когда-нибудь придётся отключить, собери с прямым адресом:
+
+```cmd
+flutter build apk --release --dart-define=SUPABASE_URL=https://jdjgrczsnhroqjasipai.supabase.co
+```
+
+## Как проверить, что прокси жив
+
+Открой на телефоне **без VPN**:
+
+```
+https://luxe-proxy.gfpmmp.workers.dev/auth/v1/health?apikey=sb_publishable_AC4IUfDWKTpiqDForg49ig_KrJ2ZbAp
+```
+
+Ответ от GoTrue (сервер авторизации Supabase) — значит цепочка цела.
+Ошибка про `apikey` — ключ не подставился, проверь адрес.
+
 ## Ограничения, о которых стоит знать
 
 - **Бесплатный план — 100 000 запросов в сутки.** Для мессенджера с

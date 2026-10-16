@@ -36,16 +36,21 @@ class Net {
   ///
   /// Спрашиваем health Supabase — он не требует авторизации и отвечает
   /// быстро, поэтому годится как «есть ли связь».
+  ///
+  /// Ключ кладём и в заголовок, и в адрес: при пробросе через Worker
+  /// заголовок теоретически может потеряться, а Supabase принимает и
+  /// query-параметр. Так проверка не врёт из-за одной потерянной строчки.
   static Future<bool> reachable() async {
     final client = buildClient();
     try {
       final res = await client
           .get(
-            Uri.parse('${SupabaseConfig.url}/auth/v1/health'),
+            Uri.parse('${SupabaseConfig.url}/auth/v1/health'
+                '?apikey=${SupabaseConfig.anonKey}'),
             headers: {'apikey': SupabaseConfig.anonKey},
           )
           .timeout(connectTimeout);
-      // 401/403 тоже считаем успехом: значит сервер на месте и ключ виден.
+      // 4xx тоже считаем успехом: значит сервер на месте и ключ виден.
       return res.statusCode < 500;
     } catch (_) {
       return false;

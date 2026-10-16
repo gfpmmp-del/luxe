@@ -1,26 +1,33 @@
 /// Адреса сервера.
 ///
-/// Базовый адрес можно переопределить при сборке:
+/// По умолчанию приложение ходит через Cloudflare Worker, потому что
+/// часть мобильных сетей (LTE некоторых операторов, отдельные Wi-Fi)
+/// режет домен *.supabase.co — без VPN приложение не грузится. Worker
+/// пересылает запросы в Supabase, и заблокированный домен в цепочке
+/// не появляется.
+///
+/// Прямой адрес остаётся запасным вариантом. Включить его при сборке:
+///
 /// ```
-/// flutter build apk --release --dart-define=SUPABASE_URL=https://luxe-proxy.твой-ник.workers.dev
+/// flutter build apk --release --dart-define=SUPABASE_URL=https://jdjgrczsnhroqjasipai.supabase.co
 /// ```
-/// Это нужно, потому что часть мобильных сетей режет домен
-/// *.supabase.co. Тогда перед Supabase ставится Cloudflare Worker
-/// (см. cloudflare/worker.js) и клиент ходит на обычный домен.
+///
+/// Код Worker: cloudflare/worker.js, инструкция: cloudflare/README.md
 class SupabaseConfig {
-  /// Адрес Supabase напрямую — рабочий вариант на нормальных сетях.
+  /// Прокси. Основной адрес.
+  static const String workerUrl = 'https://luxe-proxy.gfpmmp.workers.dev';
+
+  /// Напрямую в Supabase. Работает не везде, оставлен как запасной путь.
   static const String directUrl =
       'https://jdjgrczsnhroqjasipai.supabase.co';
 
-  /// Прокси. По умолчанию — прямой адрес, пока воркер не настроен.
-  /// Впиши сюда адрес своего воркера, чтобы включить его раз и навсегда,
-  /// либо передай SUPABASE_URL при сборке.
-  static const String _proxyUrl = String.fromEnvironment('SUPABASE_URL');
+  /// Переопределение при сборке. Пусто — берётся workerUrl.
+  static const String _override = String.fromEnvironment('SUPABASE_URL');
 
-  static String get url => _proxyUrl.isNotEmpty ? _proxyUrl : directUrl;
+  static String get url => _override.isNotEmpty ? _override : workerUrl;
 
-  /// Прокси включён? Иначе часть функций можно чинить иначе.
-  static bool get viaProxy => _proxyUrl.isNotEmpty;
+  /// Идём через прокси? От этого зависит текст ошибок в приложении.
+  static bool get viaProxy => url == workerUrl;
 
   static const String anonKey = 'sb_publishable_AC4IUfDWKTpiqDForg49ig_KrJ2ZbAp';
 }
