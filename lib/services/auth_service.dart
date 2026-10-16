@@ -1,4 +1,7 @@
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../main.dart';
+import 'net.dart';
 import 'push_service.dart';
 
 class AuthService {
@@ -35,14 +38,24 @@ class AuthService {
     required String password,
   }) async {
     try {
-      await supabase.auth.signInWithPassword(email: email, password: password);
+      // Повторяем: сеть может отпустить со второй попытки.
+      await Net.retry(
+        () => supabase.auth
+            .signInWithPassword(email: email, password: password),
+      ).timeout(Net.connectTimeout * 2);
       await supabase.from('profiles').update({
         'status': 'online',
         'last_seen': DateTime.now().toIso8601String(),
       }).eq('id', supabase.auth.currentUser!.id);
       await PushService.init();
-    } catch (e) {
+    } on AuthException {
+      // Сервер ответил — значит дело в учётных данных.
       return 'Неверный логин или пароль';
+    } catch (e) {
+      // Сюда попадают обрывы сети и таймауты. Раньше здесь тоже
+      // отвечали «неверный пароль», и человек зря искал ошибку в
+      // пароле вместо того, чтобы проверить интернет.
+      return Net.humanError(e);
     }
     return null;
   }
