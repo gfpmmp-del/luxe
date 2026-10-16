@@ -49,10 +49,14 @@ class UpdateService {
   /// Текущая версия приложения.
   ///
   /// Номер подставляет сборка через --dart-define=APP_VERSION=...
-  /// Без него показываем то, что записано в pubspec по умолчанию.
+  /// Запасное значение обязано совпадать с `version:` в pubspec.yaml:
+  /// на iOS Codemagic собирает без dart-define, и там считается оно.
   static const String _fromDefine = String.fromEnvironment('APP_VERSION');
 
-  static String get currentVersion => _fromDefine.isNotEmpty ? _fromDefine : '1.0.0';
+  static const String _fallbackVersion = '1.1.0';
+
+  static String get currentVersion =>
+      _fromDefine.isNotEmpty ? _fromDefine : _fallbackVersion;
 
   /// Прочитать описание новой версии.
   static Future<ReleaseInfo?> check() async {

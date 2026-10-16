@@ -14,7 +14,13 @@ workflows:
       - name: Build
         # iOS 14+ не даёт запускать debug-сборки Flutter с домашнего экрана,
         # поэтому собираем release. --no-codesign — подпись добавит Sideloadly.
-        script: flutter build ios --release --no-codesign --split-debug-info=build/symbols
+        # Версию берём из pubspec, чтобы проверка обновлений внутри
+        # приложения считала правильный номер и не предлагала обновление
+        # тому, кто уже на свежей сборке.
+        script: |
+          V=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: *//' | cut -d'+' -f1)
+          echo "Собираем версию $V"
+          flutter build ios --release --no-codesign --split-debug-info=build/symbols --dart-define=APP_VERSION=$V
       - name: Package IPA
         script: |
           cd build/ios/iphoneos
@@ -35,6 +41,8 @@ workflows:
       - name: Get packages
         script: flutter pub get
       - name: Build and sign
-        script: flutter build ipa --release
+        script: |
+          V=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: *//' | cut -d'+' -f1)
+          flutter build ipa --release --dart-define=APP_VERSION=$V
     artifacts:
       - build/ios/ipa/*.ipa

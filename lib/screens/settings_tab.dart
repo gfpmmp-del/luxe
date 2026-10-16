@@ -6,6 +6,7 @@ import '../config/supabase_config.dart';
 import '../services/auth_service.dart';
 import '../services/media_service.dart';
 import '../services/premium_service.dart';
+import '../services/update_service.dart';
 import '../theme/luxe_theme.dart';
 import '../widgets/luxe_widgets.dart';
 import 'premium_screen.dart';
@@ -350,12 +351,15 @@ class SettingsTabState extends State<SettingsTab> {
                     const Icon(Icons.info_outline, color: LuxeColors.tgBlue),
                 title: const Text('О Luxe'),
                 subtitle: Text(
-                    'Версия 1.0 • Flutter + Supabase\n'
+                    // Версию берём ту же, что и проверка обновлений.
+                    // Раньше тут было зашитое «1.0.0»: после выпуска
+                    // обновлений человек не мог понять, какая у него.
+                    'Версия ${UpdateService.currentVersion} • Flutter + Supabase\n'
                     'Сервер: ${SupabaseConfig.routeName}'),
                 onTap: () => showAboutDialog(
                   context: context,
                   applicationName: 'Luxe',
-                  applicationVersion: '1.0.0',
+                  applicationVersion: UpdateService.currentVersion,
                   children: const [
                     Text('Мессенджер с чатами и звонками.')
                   ],
