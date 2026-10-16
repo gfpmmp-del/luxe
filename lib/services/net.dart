@@ -157,16 +157,39 @@ class _FreshConnectionClient extends http.BaseClient {
     final client = IOClient(inner);
     try {
       final res = await client.send(request);
-      // Закрываем соединение, только когда тело дочитано: закрыть
-      // раньше — значит оборвать ответ на середине.
-      res.stream.listen(
-        (_) {},
-        onDone: () => inner.close(force: false),
-        onError: (_) => inner.close(force: true),
-        cancelOnError: true,
+
+      // Соединение закрываем, когда тело дочитают: закрыть раньше —
+      // значит оборвать ответ на середине.
+      //
+      // Через transform, а не своим слушателем на res.stream: поток
+      // ответа одноразовый. Если подписаться на него дважды — на
+      // закрытие и на чтение — второй слушатель получит ошибку
+      // «Stream has already been listened to» вместо данных. Именно
+      // так всё и сломалось в прошлой версии.
+      final stream = res.stream.transform(
+        StreamTransformer<List<int>, List<int>>.fromHandlers(
+          handleDone: (sink) {
+            sink.close();
+            inner.close(force: false);
+          },
+          handleError: (error, stack, sink) {
+            sink.addError(error, stack);
+            inner.close(force: true);
+          },
+        ),
       );
-      return res;
-    } catch (e) {
+
+      return http.StreamedResponse(
+        stream,
+        res.statusCode,
+        contentLength: res.contentLength,
+        request: res.request,
+        headers: res.headers,
+        isRedirect: res.isRedirect,
+        persistentConnection: false,
+        reasonPhrase: res.reasonPhrase,
+      );
+    } catch (_) {
       inner.close(force: true);
       client.close();
       rethrow;
@@ -175,6 +198,6 @@ class _FreshConnectionClient extends http.BaseClient {
 
   @override
   void close() {
-    // Соединения и так закрываются по завершении запросов
+    // Соединения закрываются по завершении запросов
   }
 }
