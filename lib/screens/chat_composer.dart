@@ -92,8 +92,15 @@ class ChatComposerState extends State<ChatComposer>
   // ---------------- Голосовые ----------------
 
   Future<void> _startVoice() async {
-    final ok = await _voice.start();
-    if (!ok || !mounted) return;
+    final error = await _voice.start();
+    if (!mounted) return;
+    if (error != null) {
+      // Раньше отказ молчал: нажал микрофон — и ничего. Пользователь
+      // считал кнопку сломанной.
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error)));
+      return;
+    }
     setState(() {
       _recording = true;
       _cancelArmed = false;
@@ -118,10 +125,16 @@ class ChatComposerState extends State<ChatComposer>
     final path = await _voice.stop();
     if (!mounted) return;
     setState(() => _recording = false);
-    if (path == null) return;
-    // Слишком короткое не отправляем — обычно это случайный тап.
+    if (path == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Запись пустая, попробуйте ещё раз')));
+      return;
+    }
+    // Слишком короткое не отправляем — обычно это случайный тап,
+    // но раньше об этом тоже никто не сообщал.
     if (seconds < 1) {
-      debugPrint('Голосовое слишком короткое, не отправляем');
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Слишком коротко — держите дольше секунды')));
       return;
     }
     widget.onVoiceReady(File(path), seconds, wave);
@@ -279,14 +292,20 @@ class ChatComposerState extends State<ChatComposer>
           ),
           const SizedBox(width: 4),
           StickerButton(onTap: () => _toggleStickers()),
-          // Микрофон — только пока поле пустое: набранный текст важнее,
-          // иначе кнопки начинают спорить с кнопкой отправки.
-          if (!widget.isChannel && widget.controller.text.isEmpty)
-            IconButton(
-              onPressed: _startVoice,
-              icon: Icon(Icons.mic_none_rounded, size: 22, color: fg),
-              tooltip: 'Голосовое сообщение',
-            ),
+          // Кнопка микрофона зависит от того, пусто ли поле. Раньше поле
+          // читалось только при сборке: стоило что-то напечатать и стереть,
+          // и кнопка пропадала навсегда — голосовое становилось недоступно.
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: widget.controller,
+            builder: (context, value, _) => !widget.isChannel &&
+                    value.text.isEmpty
+                ? IconButton(
+                    onPressed: _startVoice,
+                    icon: Icon(Icons.mic_none_rounded, size: 22, color: fg),
+                    tooltip: 'Голосовое сообщение',
+                  )
+                : const SizedBox.shrink(),
+          ),
           // Вложения нужны и в каналах — кружок там лишний, потому
           // что это личная запись, а не пост.
           PopupMenuButton<String>(

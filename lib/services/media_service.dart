@@ -134,11 +134,16 @@ class MediaService {
   static Future<String> uploadVideo(XFile file) => uploadMedia(file, 'videos');
 
   /// Голосовое сообщение. Файл уже лежит на диске после записи.
+  ///
+  /// Расширение и content-type берём из самого файла: Android и iOS пишут
+  /// AAC в контейнер m4a, а Windows — в сырой ADTS (.aac). Если назвать
+  /// файл .m4a при потоке ADTS, часть плееров откажется его читать.
   static Future<String> uploadVoice(File file) async {
     final ts = DateTime.now().millisecondsSinceEpoch;
     final ext = _ext(file.path);
-    return _uploadFile(
-        'voice/$ts.${ext.isEmpty ? 'm4a' : ext}', file, 'audio/mp4');
+    final realExt = ext.isEmpty ? 'm4a' : ext;
+    final type = realExt == 'aac' ? 'audio/aac' : 'audio/mp4';
+    return _uploadFile('voice/$ts.$realExt', file, type);
   }
 
   /// Кружок: записанный видеофайл с диска.
