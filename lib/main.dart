@@ -162,7 +162,7 @@ class _OfflineBarState extends State<_OfflineBar> {
       await Future.delayed(const Duration(seconds: 5));
       if (!mounted) return;
       _tries++;
-      final ok = await Net.reachable();
+      final ok = await Net.probeBase(SupabaseConfig.url);
       if (!mounted) return;
       if (ok) {
         setState(() => _online = true);

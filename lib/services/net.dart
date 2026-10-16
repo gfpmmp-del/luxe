@@ -7,7 +7,7 @@ import 'package:http/io_client.dart';
 
 import '../config/supabase_config.dart';
 
-/// Сеть: таймауты, проверка доступности и повторы.
+/// Сеть: таймауты, выбор маршрута, проверка доступности и повторы.
 ///
 /// Без этого приложение на закрытой или «сложной» сети просто висит:
 /// запрос уходит и не возвращается, а пользователь видит белый экран.
@@ -18,6 +18,13 @@ class Net {
   /// Сколько ждём данных после подключения.
   static const Duration idleTimeout = Duration(seconds: 20);
 
+  /// Принудительно ходим только по IPv4.
+  ///
+  /// Задумано для сетей со сломанным IPv6, где iOS упорно берёт
+  /// неработающий адрес. Включается только после того, как обычная
+  /// проверка не дала результата.
+  static bool forceIpv4 = false;
+
   /// HTTP-клиент с вменяемыми таймаутами.
   ///
   /// Без них HttpClient на телефоне висит до системного таймаута —
@@ -27,9 +34,9 @@ class Net {
       ..connectionTimeout = connectTimeout
       ..idleTimeout = idleTimeout
       // Одно соединение на хост. Dart держит пул живых сокетов и
-      // переиспользует их; на мобильной сети с прокси переподключение
+      // переиспользует их; на мобильной сети переподключение
       // случается незаметно, и следующий запрос уходит в мёртвый сокет
-      // и висит до таймаута. Одно соединение заставляет клиент
+      // и виснет до таймаута. Одно соединение заставляет клиент
       // вовремя заметить, что сокет мёртв, и открыть новый.
       ..maxConnectionsPerHost = 1
       // Доверяем обычным сертификатам. Смысла ослаблять проверку нет:
@@ -38,45 +45,11 @@ class Net {
     return IOClient(inner);
   }
 
-  /// Проверить, что сервер вообще отвечает.
-  ///
-  /// Спрашиваем health Supabase — он не требует авторизации и отвечает
-  /// быстро, поэтому годится как «есть ли связь».
-  ///
-  /// Ключ кладём и в заголовок, и в адрес: при пробросе через Worker
-  /// заголовок теоретически может потеряться, а Supabase принимает и
-  /// query-параметр. Так проверка не врёт из-за одной потерянной строчки.
-  static Future<bool> reachable() async {
-    final client = buildClient();
-    try {
-      final res = await client
-          .get(
-            Uri.parse('${SupabaseConfig.url}/auth/v1/health'
-                '?apikey=${SupabaseConfig.anonKey}'),
-            headers: {'apikey': SupabaseConfig.anonKey},
-          )
-          .timeout(connectTimeout);
-      // 4xx тоже считаем успехом: значит сервер на месте и ключ виден.
-      return res.statusCode < 500;
-    } catch (_) {
-      return false;
-    } finally {
-      client.close();
-    }
-  }
-
-  /// Сработало ли соединение по прокси.
-  ///
-  /// Проверяем не только вход, но и запрос к базе. Раньше проверялся
-  /// только /auth/v1 — он отвечал, а /rest/v1 висел, и приложение
-  /// считало сеть исправной.
-  static Future<bool> probeRest() => probeBase(SupabaseConfig.url);
-
   /// Проверить конкретный адрес: и вход, и запрос к базе.
   ///
-  /// Нужен оба: /auth/v1 отвечает быстро даже там, где /rest/v1
-  /// зависает, и по нему одному судить о сети нельзя.
-  static Future<bool> probeBase(String base) async {
+  /// Одного /auth/v1 мало: он отвечает быстро даже там, где /rest/v1
+  /// зависает, и по нему судить о сети нельзя.
+  static Future<bool> probeBase(String base, {bool ipv4 = false}) async {
     final client = buildClient();
     try {
       final auth = await client
@@ -106,10 +79,11 @@ class Net {
 
   /// Выбрать адрес, который реально работает в этой сети.
   ///
-  /// Сначала пробуем прямой адрес Supabase: он надёжнее, быстрее и
-  /// не гонит трафик через посредника. Cloudflare оставляем запасным
-  /// путём для сетей, которые режут сам Supabase — там прямой адрес
-  /// не ответит, и воркер выручит.
+  /// Порядок не случайный. Сначала прямой адрес Supabase — он надёжнее
+  /// всего и не гонит трафик через посредника. Cloudflare оставляем
+  /// запасным путём для сетей, которые режут сам Supabase.
+  ///
+  /// Возвращает null, если не отвечает ни один вариант.
   static Future<String?> pickUrl() async {
     if (!SupabaseConfig.viaProxy) return SupabaseConfig.url;
 
@@ -117,6 +91,7 @@ class Net {
       debugPrint('Работает напрямую: ${SupabaseConfig.directUrl}');
       return SupabaseConfig.directUrl;
     }
+
     debugPrint('Прямой адрес не отвечает, пробуем прокси');
     if (await probeBase(SupabaseConfig.workerUrl)) {
       debugPrint('Работает через прокси: ${SupabaseConfig.workerUrl}');

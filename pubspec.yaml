@@ -4,7 +4,10 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.4.0
+  # Не занижать: при sdk ниже 3.9 Dart прячет новые API dart:io,
+  # в том числе ConnectionTask.fromSocket — без него нельзя открыть
+  # соединение строго по IPv4 (нужно для iOS в сетях со сломанным IPv6).
+  sdk: ^3.13.0
 
 dependencies:
   flutter:
