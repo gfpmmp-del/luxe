@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/media_service.dart';
 import '../theme/luxe_theme.dart';
 
 /// Градиент по имени — стабильный цвет аватарки как в Telegram.
@@ -30,7 +31,10 @@ class GradientAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final letter = name.trim().isEmpty ? '?' : name.trim()[0].toUpperCase();
-    final hasPhoto = imageUrl != null && imageUrl!.isNotEmpty;
+    // Ссылки, записанные во времена прокси, надо чинить: сам адрес
+    // сменился, а в базе остался старый.
+    final photo = MediaService.fixUrl(imageUrl);
+    final hasPhoto = photo != null && photo.isNotEmpty;
     return Stack(
       children: [
         Container(
@@ -41,7 +45,7 @@ class GradientAvatar extends StatelessWidget {
             gradient: hasPhoto ? null : avatarGradient(name),
             image: hasPhoto
                 ? DecorationImage(
-                    image: NetworkImage(imageUrl!), fit: BoxFit.cover)
+                    image: NetworkImage(photo), fit: BoxFit.cover)
                 : null,
           ),
           alignment: Alignment.center,

@@ -672,7 +672,7 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     final status = m['status'] as String?;
     final failed = status == 'failed';
     final type = m['type'] as String? ?? 'text';
-    final url = m['file_url'] as String?;
+    final url = MediaService.fixUrl(m['file_url'] as String?);
 
     // Стикер стоит отдельно, без пузыря: так он выглядит в Telegram.
     if (type == 'sticker' && url != null && url.isNotEmpty) {

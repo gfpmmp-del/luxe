@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../main.dart';
+import '../config/supabase_config.dart';
 
 /// Выбор, загрузка и скачивание медиа в Storage bucket 'chat-media'.
 class MediaService {
@@ -209,11 +210,46 @@ class MediaService {
         'groups/$chatId-$ts.jpg', File(file.path), 'image/jpeg');
   }
 
+  /// Починить ссылку, сохранённую во времена прокси.
+  ///
+  /// Пока приложение ходило через Cloudflare Worker, в базу писались
+  /// ссылки на него. Такие ссылки до сих пор лежат в аватарках, файлах
+  /// и голосовых — и они не работают, потому что потоковая отдача
+  /// файлов у воркера ломается. Адрес не менялся, поэтому достаточно
+  /// подставить настоящий.
+  static String? fixUrl(String? url) {
+    if (url == null || url.isEmpty) return url;
+    if (!url.contains('workers.dev')) return url;
+    return url.replaceAll(SupabaseConfig.workerUrl, SupabaseConfig.directUrl);
+  }
+
+  /// Починить ссылку в готовой строке сообщения или профиля.
+  ///
+  /// Так починятся и те сообщения, что уже лежат в памяти на телефоне,
+  /// без всякой перезаливки базы.
+  static Map<String, dynamic> fixRow(Map<String, dynamic> row) {
+    final keys = ['file_url', 'avatar_url'];
+    var changed = false;
+    for (final k in keys) {
+      final v = row[k];
+      if (v is String && v.isNotEmpty) {
+        final fixed = fixUrl(v);
+        if (fixed != v) {
+          row[k] = fixed;
+          changed = true;
+        }
+      }
+    }
+    return changed ? row : row;
+  }
+
   /// Размер файла по публичному URL (байты). 0 — если не удалось определить.
   static Future<int> remoteSize(String url) async {
+    final target = fixUrl(url);
+    if (target == null) return 0;
     try {
       final client = HttpClient();
-      final req = await client.getUrl(Uri.parse(url));
+      final req = await client.getUrl(Uri.parse(target));
       final res = await req.close();
       final len = res.contentLength;
       res.drain<void>();
@@ -228,7 +264,7 @@ class MediaService {
   /// Скачать файл на устройство. Возвращает путь к сохранённому файлу.
   static Future<String> download(String url, String fileName) async {
     final client = HttpClient();
-    final req = await client.getUrl(Uri.parse(url));
+    final req = await client.getUrl(Uri.parse(fixUrl(url) ?? url));
     final res = await req.close();
     if (res.statusCode != 200) {
       client.close();

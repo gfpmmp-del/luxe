@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:lottie/lottie.dart';
 
+import '../services/media_service.dart';
 import '../theme/luxe_theme.dart';
 
 /// Показ стикера: Lottie, GIF или статичная картинка.
@@ -23,17 +24,20 @@ class StickerView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Ссылки, записанные во времена прокси, надо чинить: адрес сменился,
+    // а в базе остался старый.
+    final fixed = MediaService.fixUrl(url) ?? '';
     switch (kind) {
       case 'lottie':
         // tgs — это zip с json внутри, Lottie его не читает.
         // Поддерживаем только голый json; tts-файл покажем заглушкой.
-        if (url.toLowerCase().endsWith('.tgs')) {
+        if (fixed.toLowerCase().endsWith('.tgs')) {
           return _fallback(context, Icons.animation_rounded, 'TGS');
         }
         return ClipRRect(
           borderRadius: BorderRadius.circular(12),
           child: Lottie.network(
-            url,
+            fixed,
             width: size,
             height: size,
             repeat: animate,
@@ -48,7 +52,7 @@ class StickerView extends StatelessWidget {
           width: size,
           height: size,
           child: Image.network(
-            url,
+            fixed,
             width: size,
             height: size,
             fit: BoxFit.contain,

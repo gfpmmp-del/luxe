@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -305,10 +305,15 @@ class _ChatScreenState extends State<ChatScreen> {
                       itemBuilder: (context, i) {
                         final m = msgs[i];
                         final mine = m['sender_id'] == myId;
+                        // Ссылки, записанные во времена прокси, не
+                        // работают: адрес сменился, а в базе остался
+                        // старый. Чиним на лету.
+                        final fileUrl =
+                            MediaService.fixUrl(m['file_url'] as String?);
                         // Стикер показываем без пузыря, как в Telegram
                         if (m['type'] == 'sticker' &&
-                            m['file_url'] != null &&
-                            '${m['file_url']}'.isNotEmpty) {
+                            fileUrl != null &&
+                            fileUrl.isNotEmpty) {
                           return Align(
                             alignment: mine
                                 ? Alignment.centerRight
@@ -322,9 +327,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                     : CrossAxisAlignment.start,
                                 children: [
                                   StickerView(
-                                    url: m['file_url'] as String,
-                                    kind: MediaService.stickerKind(
-                                        m['file_url'] as String),
+                                    url: fileUrl,
+                                    kind: MediaService.stickerKind(fileUrl),
                                     size: 124,
                                   ),
                                   Text(
@@ -396,9 +400,9 @@ class _ChatScreenState extends State<ChatScreen> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 if (m['type'] == 'voice' &&
-                                    m['file_url'] != null)
+                                    fileUrl != null && fileUrl.isNotEmpty)
                                   VoiceMessage(
-                                    url: m['file_url'] as String,
+                                    url: fileUrl,
                                     waveform: m['waveform'] as String?,
                                     durationSeconds:
                                         (m['duration'] as num?)?.toInt() ?? 0,
@@ -409,14 +413,14 @@ class _ChatScreenState extends State<ChatScreen> {
                                     onPlayed: () => _markVoicePlayed(m),
                                   )
                                 else if (m['type'] == 'circle' &&
-                                    m['file_url'] != null)
+                                    fileUrl != null && fileUrl.isNotEmpty)
                                   VideoCircle(
-                                    url: m['file_url'] as String,
+                                    url: fileUrl,
                                     durationSeconds:
                                         (m['duration'] as num?)?.toInt() ?? 0,
                                     mine: mine,
                                   )
-                                else if (m['type'] == 'file' && m['file_url'] != null)
+                                else if (m['type'] == 'file' && fileUrl != null)
                                   Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
@@ -439,7 +443,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                       const SizedBox(height: 4),
                                       InkWell(
                                         onTap: () async {
-                                          final url = m['file_url'] as String;
+                                          final url = fileUrl;
                                           if (await canLaunchUrl(Uri.parse(url))) {
                                             await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
                                           } else {

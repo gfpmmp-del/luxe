@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
+import '../services/media_service.dart';
 import '../theme/luxe_theme.dart';
 
 /// Видеокружок: запись, отправленная круглым значком.
@@ -29,6 +30,10 @@ class _VideoCircleState extends State<VideoCircle> {
   bool _ready = false;
   String? _error;
 
+  /// Ссылка, по которой качаем: старая, записанная во времена прокси,
+  /// не работает.
+  late final String _playable;
+
   @override
   void initState() {
     super.initState();
@@ -36,8 +41,9 @@ class _VideoCircleState extends State<VideoCircle> {
   }
 
   Future<void> _init() async {
+    _playable = MediaService.fixUrl(widget.url) ?? widget.url;
     try {
-      final c = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      final c = VideoPlayerController.networkUrl(Uri.parse(_playable));
       await c.initialize();
       await c.setLooping(true);
       await c.setVolume(0); // превью всегда без звука
@@ -67,7 +73,7 @@ class _VideoCircleState extends State<VideoCircle> {
       PageRouteBuilder(
         opaque: false,
         barrierColor: Colors.black,
-        pageBuilder: (_, __, ___) => _CircleViewer(url: widget.url),
+        pageBuilder: (_, __, ___) => _CircleViewer(url: _playable),
         transitionsBuilder: (_, anim, __, child) =>
             FadeTransition(opacity: anim, child: child),
       ),

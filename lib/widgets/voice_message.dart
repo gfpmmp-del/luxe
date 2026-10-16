@@ -1,13 +1,17 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../services/media_service.dart';
 import '../services/voice_service.dart';
 import '../theme/luxe_theme.dart';
 
-/// Голосовое сообщение: кнопка, звуковая волна, время и галочка
-/// прослушивания — как в Telegram.
-class VoiceMessage extends StatefulWidget {
+  /// Голосовое сообщение: кнопка, звуковая волна, время и галочка
+  /// прослушивания — как в Telegram.
+  ///
+  /// [url] чинится на лету: ссылки, записанные во времена прокси,
+  /// указывают на адрес, который уже не обслуживает файлы.
+  class VoiceMessage extends StatefulWidget {
   final String url;
   final String? waveform; // упакованная волна из БД
   final int durationSeconds;
@@ -40,9 +44,14 @@ class _VoiceMessageState extends State<VoiceMessage> {
   Duration? _total;
   bool _playing = false;
 
+  /// Ссылка, по которой реально качаем: старая, записанная во времена
+  /// прокси, не работает.
+  late final String _playable;
+
   @override
   void initState() {
     super.initState();
+    _playable = MediaService.fixUrl(widget.url) ?? widget.url;
     final p = VoicePlayer.instance;
     _posSub = p.position.listen((v) {
       if (!mounted) return;
@@ -129,7 +138,7 @@ class _VoiceMessageState extends State<VoiceMessage> {
       onTap: widget.url.isEmpty
           ? null
           : () async {
-              await VoicePlayer.instance.toggle(widget.url);
+              await VoicePlayer.instance.toggle(_playable);
               _markPlayed();
             },
       child: Container(
@@ -172,7 +181,7 @@ class _VoiceMessageState extends State<VoiceMessage> {
             final total = _total ?? VoicePlayer.instance.duration;
             if (total == null || total.inMilliseconds == 0) return;
             final frac = (d.localPosition.dx / box.maxWidth).clamp(0.0, 1.0);
-            await VoicePlayer.instance.seekFraction(widget.url, frac);
+            await VoicePlayer.instance.seekFraction(_playable, frac);
             _markPlayed();
           },
           child: SizedBox(

@@ -126,7 +126,7 @@ class ChatService {
         'профили людей',
       );
       for (final r in (rows as List).cast<Map<String, dynamic>>()) {
-        out[r['id'] as String] = r;
+        out[r['id'] as String] = MediaService.fixRow(r);
       }
     }
     return out;
