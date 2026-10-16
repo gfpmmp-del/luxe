@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'config/supabase_config.dart';
@@ -7,10 +9,29 @@ import 'theme/luxe_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // runApp сразу: показываем экран подключения, а не белый фон.
-  // Раньше инициализация шла до runApp, и на закрытой сети приложение
-  // выглядело как зависшее.
+  // Настройки для ВСЕГО сетевого трафика, а не только клиента Supabase.
+  // Аватарки, картинки и файлы грузятся через HttpClient по умолчанию,
+  // где таймаутов нет вовсе: запрос не падает, а висит до системного
+  // лимита, и картинка просто не появляется.
+  HttpOverrides.global = LuxeHttpOverrides();
   runApp(const LuxeApp());
+}
+
+/// Общие настройки сетевого клиента для всего приложения.
+///
+/// Без них загрузка медиа уходит в бесконечное ожидание: дефолтный
+/// HttpClient на телефоне способен ждать несколько минут.
+class LuxeHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10)
+      ..idleTimeout = const Duration(seconds: 20)
+      ..maxConnectionsPerHost = 4
+      // Сертификаты проверяем как положено. Ослабление здесь ничего
+      // не даёт нашим доменам, зато открывает дорогу подмене трафика.
+      ..badCertificateCallback = (cert, host, port) => false;
+  }
 }
 
 final supabase = Supabase.instance.client;
