@@ -32,7 +32,13 @@ export default {
 
     const target = `https://${UPSTREAM_HOST}${url.pathname}${url.search}`;
     const headers = forwardHeaders(request);
+    // Просим Supabase отдавать ответ без сжатия. Иначе Worker распаковывает
+    // тело, а заголовок content-encoding уходит клиенту вместе с уже
+    // распакованными байтами — часть клиентов (в том числе dart:io на
+    // телефоне) после этого молча зависает в ожидании ответа.
+    headers.set('Accept-Encoding', 'identity');
 
+    const started = Date.now();
     try {
       const upstream = await fetch(target, {
         method: request.method,
@@ -44,6 +50,13 @@ export default {
         redirect: 'manual',
       });
 
+      // Без этого лога невозможно понять, куда девается запрос
+      // приложения: лента пустая, ошибки нет, а чаты не грузятся.
+      console.log(
+        `${request.method} ${url.pathname}${url.search} -> ` +
+        `${upstream.status} за ${Date.now() - started}мс`
+      );
+
       return new Response(upstream.body, {
         status: upstream.status,
         statusText: upstream.statusText,
@@ -52,6 +65,9 @@ export default {
     } catch (e) {
       // Сеть обрезала соединение на полпути. 502 честнее, чем
       // непонятная пустая ошибка на телефоне.
+      console.error(
+        `${request.method} ${url.pathname} не прошёл за ${Date.now() - started}мс: ${e}`
+      );
       return new Response('Прокси не смог связаться с сервером', {
         status: 502,
         headers: { 'content-type': 'text/plain; charset=utf-8' },
@@ -147,11 +163,13 @@ function forwardHeaders(request) {
   return headers;
 }
 
-/** Заголовки ответа: проксируем почти всё, но длину считаем заново. */
+/** Заголовки ответа: длину и кодировку задаём сами. */
 function forwardResponseHeaders(upstream) {
   const headers = new Headers();
   for (const [key, value] of upstream.entries()) {
     const lower = key.toLowerCase();
+    // Кодировку выкидываем: Worker уже распаковал тело, а заголовок
+    // остался от исходного ответа.
     if (lower === 'content-encoding' || lower === 'content-length') continue;
     // set-cookie приходит списком — иначе теряются все, кроме первого.
     if (lower === 'set-cookie') continue;
