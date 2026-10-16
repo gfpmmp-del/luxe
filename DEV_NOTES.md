@@ -122,13 +122,41 @@ flutter build apk --release --dart-define=SUPABASE_URL=https://luxe-proxy.<ни�
 режет GitHub.
 
 **Перед выпуском новой версии:**
-1. Поднять `version` в `pubspec.yaml` и в `latest.json`
-2. Собрать с `--dart-define=APP_VERSION=<версия>` — без него приложение
-   считает себя `1.0.0` и обновление не предложит
-3. Выложить `luxe.apk` и `LuxeMessenger-windows.zip` в Releases GitHub
-   с тегом `v<версия>`
+1. Поднять `version` в `pubspec.yaml` и `_fallbackVersion` в
+   `lib/services/update_service.dart` (это запасное значение, если сборка
+   сделана без `--dart-define`)
+2. Собрать с `--dart-define=APP_VERSION=<версия>`. iOS собирается на
+   Codemagic — там версия берётся из `pubspec.yaml` автоматически
+3. Создать релиз `v<версия>` на GitHub и положить туда `luxe.apk` и
+   `LuxeMessenger-windows.zip`
 4. Обновить ссылки `apk_url` и `zip_url` в `latest.json`
 5. `git add -A && git commit && git push`
+
+**Если релиза на GitHub нет — `latest.json` молча врёт.** Приложение
+покажет «Установлена последняя версия», хотя файла по ссылке может не
+ существовать. Всегда проверять, что релиз создан и файлы отдают 200.
+
+### Как создать релиз без `gh`
+
+`gh` на этой машине нет. Токен лежит в Windows Credential Manager — тем
+же, что и для `git push`. Достать его и залить файлы через API:
+
+```powershell
+$out = "protocol=https`nhost=github.com`n`n" | git credential fill
+$tok = ($out | Where-Object { $_.StartsWith("password=") }) -replace "^password=", ""
+$H = @{ Authorization = "Bearer $tok"; Accept = "application/vnd.github+json"; "User-Agent" = "luxe-release" }
+
+# создать релиз
+$body = @{ tag_name="v1.2.0"; name="Luxe 1.2.0"; body="..."; draft=$false; prerelease=$false } | ConvertTo-Json
+$rel = Invoke-RestMethod "https://api.github.com/repos/gfpmmp-del/luxe/releases" -Headers $H -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($body)) -ContentType "application/json; charset=utf-8"
+
+# залить файлы
+Invoke-RestMethod "https://uploads.github.com/repos/gfpmmp-del/luxe/releases/$($rel.id)/assets?name=luxe.apk" -Headers $H -Method Post -Body ([IO.File]::ReadAllBytes("C:\out\luxe.apk")) -ContentType "application/vnd.android.package-archive" -TimeoutSec 900
+```
+
+Чтобы перезалить файл в уже созданном релизе — сначала удалить старый
+актив: `DELETE /repos/gfpmmp-del/luxe/releases/assets/<id>`, потом грузить
+заново (GitHub не даёт заменить файл напрямую).
 
 **Где что невозможно:**
 - iOS — приложение не может обновить себя, только TestFlight или App Store
