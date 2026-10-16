@@ -4,10 +4,10 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  # Не занижать: при sdk ниже 3.9 Dart прячет новые API dart:io,
-  # в том числе ConnectionTask.fromSocket — без него нельзя открыть
-  # соединение строго по IPv4 (нужно для iOS в сетях со сломанным IPv6).
-  sdk: ^3.13.0
+  # Не поднимать выше 3.12: на Codemagic стоит Dart 3.12.2, и при более
+  # высоком требовании `flutter pub get` там падает с «version solving
+  # failed», а iOS-сборка не запускается вовсе.
+  sdk: ^3.12.0
 
 dependencies:
   flutter:
