@@ -88,3 +88,34 @@ flutter build windows --release
 Настройка идёт **до** `getUserMedia`, `ensureAudioSession()` — **после** него.
 До появления аудиотрека плагин считает, что записывать нечего, и Voice
 Processing (VPIO на iOS) не включается.
+
+## Сеть: обход блокировок
+
+Часть мобильных сетей режет `*.supabase.co` — без VPN приложение не
+грузится. Отдельная правка кода тут не поможет: домен один, и если он
+зарезан, клиенту некуда идти.
+
+Решение — Cloudflare Worker перед Supabase (`cloudflare/worker.js`,
+инструкция в `cloudflare/README.md`). Клиент ходит на `workers.dev`,
+Worker проксирует `/rest/v1`, `/auth/v1`, `/storage/v1` и WebSocket
+`/realtime/v1/websocket` на проект.
+
+Адрес переключается **только через сборку**, кодом не трогаем:
+
+```cmd
+flutter build apk --release --dart-define=SUPABASE_URL=https://luxe-proxy.<ник>.workers.dev
+```
+
+Все пути SDK строятся из базового URL, поэтому больше ничего менять
+не пришлось. Убрать `--dart-define` = вернуться напрямую.
+
+## Голосовые: важная деталь
+
+`record` требует **настоящий** путь к файлу. На Android внутри стоит
+`MediaRecorder.setOutputFile(path)`, и на пустой строке он выбрасывает
+исключение — запись просто не начинается. Путь задаёт сам
+`VoiceService` через `getTemporaryDirectory()`.
+
+Отказ по любой причине показывается пользователю. Молчаливый отказ
+выглядит как сломанная кнопка, и чинить приходится вслепую.
+
