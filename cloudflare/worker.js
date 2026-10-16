@@ -74,7 +74,11 @@ export default {
       // частями, телефон подключение держал и ждал продолжения,
       // которого уже не было, пока не срабатывал таймаут.
       const body = await upstream.arrayBuffer();
-      respHeaders.set('content-length', String(body.byteLength));
+      // Длину НЕ выставляем вручную. Телефон присылает Accept-Encoding,
+      // Cloudflare жмёт ответ на лету, и выдуманный нами content-length
+      // перестаёт совпадать с тем, что реально уходит по проводу.
+      // Клиент ждёт недостающие байты и виснет до таймаута.
+      // Размер посчитает сама платформа.
       console.log(
         `  отдаём ${body.byteLength} байт для ${url.pathname}`
       );

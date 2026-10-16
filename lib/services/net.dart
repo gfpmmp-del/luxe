@@ -26,6 +26,12 @@ class Net {
     final inner = HttpClient()
       ..connectionTimeout = connectTimeout
       ..idleTimeout = idleTimeout
+      // Одно соединение на хост. Dart держит пул живых сокетов и
+      // переиспользует их; на мобильной сети с прокси переподключение
+      // случается незаметно, и следующий запрос уходит в мёртвый сокет
+      // и висит до таймаута. Одно соединение заставляет клиент
+      // вовремя заметить, что сокет мёртв, и открыть новый.
+      ..maxConnectionsPerHost = 1
       // Доверяем обычным сертификатам. Смысла ослаблять проверку нет:
       // нашим сертификатам это не поможет, а защиту сломает.
       ..badCertificateCallback = (cert, host, port) => false;
@@ -51,6 +57,31 @@ class Net {
           )
           .timeout(connectTimeout);
       // 4xx тоже считаем успехом: значит сервер на месте и ключ виден.
+      return res.statusCode < 500;
+    } catch (_) {
+      return false;
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Сработало ли соединение по прокси.
+  ///
+  /// Проверяем не только вход, но и запрос к базе. Раньше проверялся
+  /// только /auth/v1 — он отвечал, а /rest/v1 висел, и приложение
+  /// считало сеть исправной.
+  static Future<bool> probeRest() async {
+    final client = buildClient();
+    try {
+      final res = await client
+          .get(
+            Uri.parse('${SupabaseConfig.url}/rest/v1/chat_members'
+                '?select=chat_id&limit=1'
+                '&apikey=${SupabaseConfig.anonKey}'),
+            headers: {'apikey': SupabaseConfig.anonKey},
+          )
+          .timeout(connectTimeout);
+      // Пустой массив — это успех: база ответила, просто строк нет.
       return res.statusCode < 500;
     } catch (_) {
       return false;
