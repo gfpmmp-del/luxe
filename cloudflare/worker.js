@@ -41,14 +41,16 @@ async function handleTurnCredentials(request, env) {
 
   try {
     const up = await fetch(
-      `https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate`,
+      // Именно generate-ice-servers. Путь без суффикса Cloudflare не
+      // знает и отвечает 404 — ключи не выдаются, звонки не чинятся.
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate-ice-servers`,
       {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiToken}`,
           'Content-Type': 'application/json',
         },
-        // Сутки — приложение попросит новые, когда срок выйдет.
+        // Сутки. Приложение попросит новые, когда срок выйдет.
         body: JSON.stringify({ ttl: 86400 }),
       }
     );

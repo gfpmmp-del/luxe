@@ -48,10 +48,23 @@ Cloudflare даёт ретрансляцию бесплатно, но ключи
 https://luxe-proxy.<ник>.workers.dev/turn-credentials
 ```
 
-Должен вернуться JSON с `iceServers`, `username` и `credential`.
+Должен вернуться JSON вида:
+
+```json
+{"iceServers":[
+  {"urls":["stun:stun.cloudflare.com:3478"]},
+  {"urls":["turn:turn.cloudflare.com:3478?transport=udp", "..."],
+   "username":"...","credential":"..."}
+]}
+```
+
 Если вместо этого `TURN не настроен` — секреты не заданы или
 переименованы. Если `Cloudflare отказал выдать ключ` — ключ выключен
 или истёк.
+
+**Эндпоинт — `generate-ice-servers`.** Без этого суффикса Cloudflare
+отвечает 404, ключи не выдаются, а звонки продолжают не соединяться
+так, будто TURN не настроен вовсе.
 
 **Если адрес недоступен из твоей сети** — приложение попробует второй
 (`jdjgrczsnhroqjasipai.supabase.co/turn-credentials`), но там маршрут

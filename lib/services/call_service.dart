@@ -75,16 +75,25 @@ class CallService {
         final body = jsonDecode(res.body);
         if (body is! Map) continue;
         final ice = body['iceServers'];
-        if (ice is! Map) continue;
-        final urls = ice['urls'];
-        if (urls is! List || urls.isEmpty) continue;
-        _turnCache = [
-          {
+        // Cloudflare отдаёт СПИСОМ: первым идёт STUN без логина,
+        // вторым — TURN с username и credential. Раньше ждали объект
+        // и тихо получали пустой список — звонки оставались без
+        // ретрансляции.
+        if (ice is! List || ice.isEmpty) continue;
+        final servers = <Map<String, dynamic>>[];
+        for (final entry in ice) {
+          if (entry is! Map) continue;
+          final urls = entry['urls'];
+          if (urls is! List || urls.isEmpty) continue;
+          servers.add({
             'urls': urls.map((u) => u.toString()).toList(),
-            'username': ice['username']?.toString(),
-            'credential': ice['credential']?.toString(),
-          }
-        ];
+            if (entry['username'] != null) 'username': entry['username'].toString(),
+            if (entry['credential'] != null)
+              'credential': entry['credential'].toString(),
+          });
+        }
+        if (servers.isEmpty) continue;
+        _turnCache = servers;
         _turnAt = DateTime.now();
         return _turnCache!;
       } catch (_) {
@@ -119,7 +128,8 @@ class CallService {
           {'urls': 'stun:stun1.l.google.com:19302'},
         ]
       };
-      debugPrint('TURN подключён: ${servers.first['urls']}');
+      debugPrint('TURN подключён: ${servers.length} серверов, '
+          'например ${(servers.first['urls'] as List).first}');
     } catch (e) {
       debugPrint('TURN не подключился: $e');
     }
