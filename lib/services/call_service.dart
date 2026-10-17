@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../main.dart';
 import 'auth_service.dart';
+import 'net.dart';
 
 /// WebRTC звонки 1-на-1. Сигналинг — таблица call_signals через Supabase Realtime.
 class CallService {
@@ -44,12 +46,84 @@ class CallService {
 
   CallService({this.onRemoteStream, this.onSignal, this.onError, this.onCallEnded});
 
-  final Map<String, dynamic> _rtcConfig = {
+  /// Адреса, где воркер отдаёт ключи для ретрансляции звонков.
+  ///
+  /// Оба пробуем: сеть может резать один из них, а приложение должно
+  /// работать и там, и там.
+  static const List<String> _turnSources = [
+    'https://luxe-proxy.gfpmmp.workers.dev/turn-credentials',
+    'https://jdjgrczsnhroqjasipai.supabase.co/turn-credentials',
+  ];
+
+  static List<Map<String, dynamic>>? _turnCache;
+  static DateTime? _turnAt;
+
+  /// Ключи для ретрансляции. Кэшируем на полчаса: ключ живёт сутки,
+  /// а запрос при каждом звонке — лишняя задержка перед соединением.
+  static Future<List<Map<String, dynamic>>> _turnServers() async {
+    final at = _turnAt;
+    if (_turnCache != null && at != null && DateTime.now().difference(at) < const Duration(minutes: 30)) {
+      return _turnCache!;
+    }
+    final client = Net.buildClient();
+    for (final src in _turnSources) {
+      try {
+        final res = await client
+            .get(Uri.parse(src))
+            .timeout(const Duration(seconds: 8));
+        if (res.statusCode != 200) continue;
+        final body = jsonDecode(res.body);
+        if (body is! Map) continue;
+        final ice = body['iceServers'];
+        if (ice is! Map) continue;
+        final urls = ice['urls'];
+        if (urls is! List || urls.isEmpty) continue;
+        _turnCache = [
+          {
+            'urls': urls.map((u) => u.toString()).toList(),
+            'username': ice['username']?.toString(),
+            'credential': ice['credential']?.toString(),
+          }
+        ];
+        _turnAt = DateTime.now();
+        return _turnCache!;
+      } catch (_) {
+        // Этот адрес недоступен — пробуем следующий
+      }
+    }
+    client.close();
+    debugPrint('Ключи TURN получить не удалось — звонок пойдёт без ретрансляции');
+    return const [];
+  }
+
+  Map<String, dynamic> _rtcConfig = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
     ]
   };
+
+  /// Добавить ретрансляцию к списку серверов.
+  ///
+  /// STUN пробивает NAT, но голос через него не передать. На сетях,
+  /// где UDP зарезан (мобильный интернет без VPN, закрытые Wi-Fi),
+  /// без TURN звонок не соединяется вовсе.
+  Future<void> loadTurn() async {
+    try {
+      final servers = await _turnServers();
+      if (servers.isEmpty) return;
+      _rtcConfig = {
+        'iceServers': [
+          ...servers,
+          {'urls': 'stun:stun.l.google.com:19302'},
+          {'urls': 'stun:stun1.l.google.com:19302'},
+        ]
+      };
+      debugPrint('TURN подключён: ${servers.first['urls']}');
+    } catch (e) {
+      debugPrint('TURN не подключился: $e');
+    }
+  }
 
   Future<void> initRenderers() async {
     await localRenderer.initialize();
@@ -72,6 +146,9 @@ class CallService {
 
   Future<void> _ensurePeerConnection() async {
     if (pc != null) return;
+    // Ключи ретрансляции забираем до создания соединения: после
+    // создания ICE уже не переспрашивает серверы.
+    await loadTurn();
     pc = await createPeerConnection(_rtcConfig);
     pc!.onTrack = (event) {
       // Рендерер предназначен только для видео. Раньше ему отдавался

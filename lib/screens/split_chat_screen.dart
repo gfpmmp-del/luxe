@@ -8,6 +8,7 @@ import '../services/chat_service.dart';
 import '../services/media_service.dart';
 import '../theme/luxe_theme.dart';
 import '../widgets/luxe_widgets.dart';
+import '../widgets/net_image.dart';
 import '../widgets/ticks.dart';
 import '../widgets/verified_badge.dart';
 import 'call_screen.dart';
@@ -856,32 +857,11 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
           GestureDetector(
             onTap: () => _openImage(context, url),
             onLongPress: () => _saveFile(context, url, m),
-            child: Image.network(
+            child: NetImage(
               url,
               width: maxW - 6,
+              height: 180,
               fit: BoxFit.cover,
-              loadingBuilder: (c, child, progress) {
-                if (progress == null) return child;
-                return Container(
-                  height: 180,
-                  width: maxW - 6,
-                  color: dark ? Colors.white10 : Colors.black12,
-                  alignment: Alignment.center,
-                  child: const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                );
-              },
-              errorBuilder: (c, e, s) => Container(
-                height: 140,
-                width: maxW - 6,
-                color: dark ? Colors.white10 : Colors.black12,
-                alignment: Alignment.center,
-                child: Icon(Icons.broken_image_rounded,
-                    color: dark ? Colors.white38 : Colors.black38, size: 34),
-              ),
             ),
           ),
           Positioned(

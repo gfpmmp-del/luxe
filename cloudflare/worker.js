@@ -18,12 +18,77 @@
 // Проект Supabase. Меняется один раз, здесь и в приложении.
 const UPSTREAM_HOST = 'jdjgrczsnhroqjasipai.supabase.co';
 
+/**
+ * Ключи для WebRTC.
+ *
+ * Без TURN звонок не соединится там, где сеть режет UDP: STUN
+ * только узнаёт адрес, а передавать голос не умеет. Cloudflare даёт
+ * ретрансляцию, но ключи у него короткоживущие — их надо брать
+ * по API. Секрет живёт в переменной Worker (secret), поэтому
+ * приложение получает уже готовые логин и пароль, а не токен
+ * Cloudflare. Иначе любой мог бы вытащить токен из APK и слать
+ * чужие запросы за твой счёт.
+ */
+async function handleTurnCredentials(request, env) {
+  const keyId = env.CF_TURN_KEY_ID;
+  const apiToken = env.CF_TURN_TOKEN;
+  if (!keyId || !apiToken) {
+    return jsonResponse(
+      { error: 'TURN не настроен: задайте CF_TURN_KEY_ID и CF_TURN_TOKEN' },
+      503
+    );
+  }
+
+  try {
+    const up = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        // Сутки — приложение попросит новые, когда срок выйдет.
+        body: JSON.stringify({ ttl: 86400 }),
+      }
+    );
+    if (!up.ok) {
+      const text = await up.text().catch(() => '');
+      console.log('Cloudflare TURN отказал:', up.status, text.slice(0, 200));
+      return jsonResponse({ error: 'Cloudflare отказал выдать ключ' }, 502);
+    }
+    const data = await up.json();
+    return jsonResponse(data, 200);
+  } catch (e) {
+    console.log('TURN недоступен:', String(e));
+    return jsonResponse({ error: 'TURN недоступен' }, 502);
+  }
+}
+
+function jsonResponse(body, status) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*',
+    },
+  });
+}
+
 // Домен Worker, например luxe-proxy.ivan.workers.dev
 // Воркер НЕ должен обращаться сам к себе — иначе получится петля.
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    // Короткоживущие ключи для звонков. Идут мимо Supabase: их
+    // выдаёт Cloudflare по своему API, а секрет хранится здесь,
+    // в переменных Worker, и в приложение не попадает.
+    if (url.pathname === '/turn-credentials') {
+      return handleTurnCredentials(request, env);
+    }
 
     // WebSocket идёт мимо обычного fetch, для него свой маршрут.
     if (isWebSocketUpgrade(request)) {

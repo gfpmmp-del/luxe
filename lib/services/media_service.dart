@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -8,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../main.dart';
 import '../config/supabase_config.dart';
+import 'net.dart';
 
 /// Выбор, загрузка и скачивание медиа в Storage bucket 'chat-media'.
 class MediaService {
@@ -104,14 +106,28 @@ class MediaService {
     }
   }
 
+  /// Понятная причина, если сеть зависла.
+  ///
+  /// Раньше загрузка файла не имела таймаута вообще. На сети, где
+  /// хранилище недоступно, соединение не рвётся, а просто висит —
+  /// и человек часами смотрел на «Загрузка…», не понимая, что
+  /// сломано. Теперь ждём недолго и говорим, что делать.
+  static String _hungError(String what) =>
+      '$what не отвечает. Похоже, сеть не даёт доступ к хранилищу. '
+      'Попробуйте ещё раз или откройте при работающей сети.';
+
   static Future<String> _uploadFile(
       String path, File file, String contentType) async {
-    await supabase.storage.from('chat-media').upload(
+    await supabase.storage
+        .from('chat-media')
+        .upload(
           path,
           file,
-          fileOptions:
-              FileOptions(contentType: contentType, upsert: true),
-        );
+          fileOptions: FileOptions(contentType: contentType, upsert: true),
+        )
+        // Крупные файлы на медленной сети шлют дольше минуты, поэтому
+        // потолок generous; но он конечен.
+        .timeout(const Duration(seconds: 120));
     return supabase.storage.from('chat-media').getPublicUrl(path);
   }
 
@@ -247,53 +263,64 @@ class MediaService {
   static Future<int> remoteSize(String url) async {
     final target = fixUrl(url);
     if (target == null) return 0;
+    final client = HttpClient()
+      ..connectionTimeout = Net.connectTimeout
+      ..idleTimeout = Net.idleTimeout;
     try {
-      final client = HttpClient();
       final req = await client.getUrl(Uri.parse(target));
-      final res = await req.close();
+      final res = await req.close().timeout(Net.connectTimeout);
       final len = res.contentLength;
       res.drain<void>();
-      client.close();
       return len;
     } catch (e) {
       debugPrint('Не удалось получить размер файла: $e');
       return 0;
+    } finally {
+      client.close();
     }
   }
 
   /// Скачать файл на устройство. Возвращает путь к сохранённому файлу.
   static Future<String> download(String url, String fileName) async {
-    final client = HttpClient();
-    final req = await client.getUrl(Uri.parse(fixUrl(url) ?? url));
-    final res = await req.close();
-    if (res.statusCode != 200) {
+    final client = HttpClient()
+      ..connectionTimeout = Net.connectTimeout
+      ..idleTimeout = Net.idleTimeout;
+    try {
+      final req = await client
+          .getUrl(Uri.parse(fixUrl(url) ?? url))
+          .timeout(Net.connectTimeout);
+      final res = await req.close().timeout(Net.connectTimeout);
+      if (res.statusCode != 200) {
+        throw Exception('Сервер ответил кодом ${res.statusCode}');
+      }
+
+      // Android — публичная папка «Загрузки», остальные — «Загрузки» пользователя
+      final dir = Platform.isAndroid
+          ? await getExternalStorageDirectory()
+          : await getDownloadsDirectory();
+      final base = dir ?? await getApplicationDocumentsDirectory();
+
+      // Имя файла без служебного префикса загрузки
+      var name = fileName;
+      final i = name.lastIndexOf('-');
+      if (i > 0 && i < name.length - 1) {
+        final tail = name.substring(i + 1);
+        if (RegExp(r'^\d+\.').hasMatch(tail)) name = tail;
+      }
+      final target = File('${base.path}/$name');
+
+      final sink = target.openWrite();
+      // Файл может качаться долго, поэтому потолок на поток данных
+      // общий, а не на соединение.
+      await res.pipe(sink).timeout(const Duration(minutes: 5));
+      await sink.flush();
+      await sink.close();
+      return target.path;
+    } on TimeoutException {
+      throw Exception(_hungError('Файл не скачивается'));
+    } finally {
       client.close();
-      throw Exception('Сервер ответил кодом ${res.statusCode}');
     }
-
-    // Android — публичная папка «Загрузки», остальные — «Загрузки» пользователя
-    final dir = Platform.isAndroid
-        ? await getExternalStorageDirectory()
-        : await getDownloadsDirectory();
-    final base = dir ??
-        await getApplicationDocumentsDirectory();
-
-    // Имя файла без служебного префикса загрузки
-    var name = fileName;
-    final i = name.lastIndexOf('-');
-    if (i > 0 && i < name.length - 1) {
-      final tail = name.substring(i + 1);
-      if (RegExp(r'^\d+\.').hasMatch(tail)) name = tail;
-    }
-    final target = File('${base.path}/$name');
-
-    final sink = target.openWrite();
-    await res.pipe(sink);
-    await sink.flush();
-    await sink.close();
-    client.close();
-
-    return target.path;
   }
 
   /// Длительность аудио/видео файла в секундах. 0 — определить не удалось.
