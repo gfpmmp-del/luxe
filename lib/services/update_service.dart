@@ -26,6 +26,19 @@ class ReleaseInfo {
   bool get isIos => defaultTargetPlatform == TargetPlatform.iOS;
 }
 
+/// Ошибка обновления с текстом, который можно показать человеку.
+///
+/// Отдельный тип, потому что раньше любая ошибка молча уходила в
+/// лог: человек видел, что ничего не происходит, и не понимал —
+/// сеть виновата или обновление сломано.
+class UpdateFailed implements Exception {
+  final String message;
+  const UpdateFailed(this.message);
+
+  @override
+  String toString() => message;
+}
+
 /// Проверка и установка обновлений.
 ///
 /// Системы разные и возможности тоже разные:
@@ -53,7 +66,7 @@ class UpdateService {
   /// на iOS Codemagic собирает без dart-define, и там считается оно.
   static const String _fromDefine = String.fromEnvironment('APP_VERSION');
 
-  static const String _fallbackVersion = '1.1.0';
+  static const String _fallbackVersion = '1.1.1';
 
   static String get currentVersion =>
       _fromDefine.isNotEmpty ? _fromDefine : _fallbackVersion;
@@ -119,45 +132,83 @@ class UpdateService {
   }
 
   /// Скачать файл и вернуть путь к нему. Показывает ход загрузки.
-  static Future<String?> download(
+  ///
+  /// Бросает [UpdateFailed] с понятным текстом. Раньше здесь был
+  /// отдельный `listen` на поток ответа, а `sink.close()` вызывался
+  /// сразу же — не дожидаясь конца файла. В результате на установщик
+  /// уходил пустой APK: приложение показывало «Скачиваем…», через
+  /// секунду возвращалось назад, и ничего не происходило. Ошибка при
+  /// этом молча проглатывалась.
+  static Future<String> download(
     ReleaseInfo info, {
     void Function(double)? onProgress,
   }) async {
     final url = info.url;
-    if (url == null) return null;
+    if (url == null) throw const UpdateFailed('В файле обновления нет ссылки');
+
     final client = Net.buildClient();
-    StreamSubscription<List<int>>? sub;
+    IOSink? sink;
+    File? target;
     try {
-      final req = http.Request('GET', Uri.parse(url));
-      final res = await client.send(req).timeout(const Duration(seconds: 30));
-      if (res.statusCode != 200) return null;
+      final res = await client
+          .send(http.Request('GET', Uri.parse(url)))
+          .timeout(const Duration(seconds: 30));
+      if (res.statusCode != 200) {
+        throw UpdateFailed('Сервер ответил кодом ${res.statusCode}');
+      }
 
       final total = res.contentLength ?? 0;
       final dir = await getTemporaryDirectory();
-      final f = File('${dir.path}/updates/luxe_update'
-          '${url.contains('.zip') ? '.zip' : '.apk'}');
+      final f = File(
+          '${dir.path}/updates/luxe_update${url.contains('.zip') ? '.zip' : '.apk'}');
+      target = f;
+      // Обрывок прошлой попытки дописался бы в новый файл, и Android
+      // потом ругался бы на битый пакет.
+      if (await f.exists()) await f.delete();
       await f.parent.create(recursive: true);
-      final sink = f.openWrite();
+
+      sink = f.openWrite();
       var got = 0;
-      sub = res.stream.listen(
-        (chunk) {
-          got += chunk.length;
-          if (total > 0) onProgress?.call(got / total);
-        },
-        onError: (Object e) => sink.close(),
-        onDone: () => sink.close(),
-        cancelOnError: true,
-      );
+      // Ключевое отличие от прежней версии: ждём каждый кусок
+      // ответа, а не подписываемся на него сбоку.
+      await for (final chunk in res.stream) {
+        sink.add(chunk);
+        got += chunk.length;
+        if (total > 0) onProgress?.call((got / total).clamp(0.0, 1.0));
+      }
       await sink.flush();
       await sink.close();
+      sink = null;
+
+      // Оборванный файл Android поставит с непонятной ошибкой, а
+      // человек решит, что обновление сломанное. Лучше сказать прямо.
+      if (total > 0 && got != total) {
+        throw UpdateFailed(
+            'Файл докачался не полностью: $got из $total байт. Похоже, связь оборвалась.');
+      }
+      final size = await f.length();
+      if (size == 0) throw const UpdateFailed('Скачался пустой файл');
+
       onProgress?.call(1);
       return f.path;
+    } on UpdateFailed {
+      rethrow;
     } catch (e) {
       debugPrint('Обновление не скачалось: $e');
-      return null;
+      throw UpdateFailed(humanError(e));
     } finally {
-      await sub?.cancel();
+      // Незакрытый sink держит файл: и он останется в кэше, и
+      // следующая попытка упрётся в него.
+      try {
+        await sink?.close();
+      } catch (_) {}
       client.close();
+      // Недоскачанный файл убираем, чтобы он не занимал место.
+      if (target != null && sink != null) {
+        try {
+          await target.delete();
+        } catch (_) {}
+      }
     }
   }
 
@@ -165,13 +216,25 @@ class UpdateService {
   ///
   /// Android — открыть системный установщик. Система спросит
   /// подтверждение, и это не обойти: так устроена защита Android.
-  static Future<bool> installAndroid(String path) async {
+  ///
+  /// Бросает [UpdateFailed] с текстом от Android, если установщик
+  /// не открылся. Раньше здесь стоял общий «Не удалось открыть
+  /// установщик» — по нему нельзя понять, мешает ли разрешение
+  /// на установку из неизвестных источников или битый файл.
+  static Future<void> installAndroid(String path) async {
     try {
       await _android.invokeMethod('install', {'path': path});
-      return true;
     } on PlatformException catch (e) {
-      debugPrint('Установщик не открылся: ${e.message}');
-      return false;
+      debugPrint('Установщик не открылся: ${e.code} / ${e.message}');
+      throw UpdateFailed(switch (e.code) {
+        'no_file' => 'Файл обновления не найден на телефоне',
+        'not_allowed' => 'Разрешите приложению ставить файлы из неизвестных '
+            'источников — иначе телефон не поставит обновление',
+        'no_installer' => 'На телефоне нет приложения для установки',
+        'install_failed' =>
+          'Система не открыла установщик. ${e.message ?? ''}'.trim(),
+        _ => 'Не удалось начать установку: ${e.message ?? e.code}',
+      });
     }
   }
 
@@ -189,24 +252,31 @@ class UpdateService {
     final temp = Directory.systemTemp.createTempSync('luxe_update');
     final cmd = File('${temp.path}/update.cmd');
 
-    // Скрипт ждёт, пока процесс освободит файлы, раскладывает новую
-    // версию поверх старой и запускает её.
+    // Скрипт ждёт, пока процесс luxe.exe действительно завершится,
+    // раскладывает новую версию поверх старой и запускает её.
+    //
+    // Раньше ожидание было поддельным: в цикле удалялся файл
+    // «%TEMP%\luxe_update», которого там никогда не было, поэтому
+    // подмена стартовала сразу, пока приложение ещё работало.
+    // xcopy упирался в занятый luxe.exe и обновление не проходило.
     final script = '''
 @echo off
 setlocal
 set "TARGET=$targetDir"
 set "ZIP=${zipPath.replaceAll('/', '\\')}"
 set "TEMP=${temp.path.replaceAll('/', '\\')}"
-timeout /t 2 /nobreak >nul
+
 :wait
-timeout /t 1 /nobreak >nul
-del "%TEMP%\\luxe_update" >nul 2>nul
-if exist "%TEMP%\\luxe_update" goto wait
-del "%TARGET%\\update_done.txt" >nul 2>nul
+tasklist /FI "IMAGENAME eq luxe.exe" 2>nul | find /I "luxe.exe" >nul
+if not errorlevel 1 (
+  timeout /t 1 /nobreak >nul
+  goto wait
+)
+
 tar -xf "%ZIP%" -C "%TEMP%" >nul 2>nul
 xcopy "%TEMP%\\*" "%TARGET%" /E /Y /Q >nul 2>nul
-start "" "%TARGET%\\luxe.exe"
 del "%ZIP%" >nul 2>nul
+start "" "%TARGET%\\luxe.exe"
 rd /s /q "%TEMP%" >nul 2>nul
 ''';
     await cmd.writeAsString(script);

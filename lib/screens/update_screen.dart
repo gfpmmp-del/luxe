@@ -22,6 +22,13 @@ class _UpdateScreenState extends State<UpdateScreen> {
   String _notes = '';
   String? _status;
 
+  /// Что скачивали последний раз — нужно для запасной ссылки
+  /// «Скачать браузером», если внутри приложения не вышло.
+  ReleaseInfo? _lastInfo;
+
+  /// Что пошло не так при попытке обновления.
+  String? _error;
+
   @override
   void initState() {
     super.initState();
@@ -37,6 +44,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
     setState(() {
       _checking = true;
       _status = null;
+      _error = null;
     });
     try {
       final info = await UpdateService.check();
@@ -101,6 +109,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
 
   /// Скачать и поставить.
   Future<void> _install(ReleaseInfo info) async {
+    _lastInfo = info;
     if (info.isIos) {
       // Система не даёт приложению поставить себя. Открываем
       // TestFlight, если он есть, иначе честно говорим, что делать.
@@ -116,6 +125,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
     setState(() {
       _downloading = true;
       _progress = 0;
+      _error = null;
     });
     try {
       final path = await UpdateService.download(
@@ -125,21 +135,13 @@ class _UpdateScreenState extends State<UpdateScreen> {
         },
       );
       if (!mounted) return;
-      if (path == null) {
-        setState(() {
-          _downloading = false;
-          _status = 'Не удалось скачать обновление';
-        });
-        return;
-      }
       setState(() => _downloading = false);
 
       if (Platform.isAndroid) {
-        final ok = await UpdateService.installAndroid(path);
-        if (!ok && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Не удалось открыть установщик'),
-          ));
+        try {
+          await UpdateService.installAndroid(path);
+        } on UpdateFailed catch (e) {
+          if (mounted) _showError(e.message);
         }
         return;
       }
@@ -154,12 +156,54 @@ class _UpdateScreenState extends State<UpdateScreen> {
         await Future.delayed(const Duration(seconds: 2));
         exit(0);
       }
+    } on UpdateFailed catch (e) {
+      if (!mounted) return;
+      setState(() => _downloading = false);
+      _showError(e.message);
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _downloading = false;
-        _status = 'Ошибка обновления: $e';
-      });
+      setState(() => _downloading = false);
+      _showError('Ошибка обновления: $e');
+    }
+  }
+
+  /// Показать, что пошло не так.
+  ///
+  /// Раньше здесь просто возвращались к экрану без единого слова:
+  /// человек нажимал «Скачать и установить», видел мелькнувшую
+  /// полоску и ничего больше. Непонятно — сеть, телефон или обновление.
+  void _showError(String text) {
+    setState(() {
+      _error = text;
+      _foundVersion = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(
+          label: 'Скачать браузером',
+          onPressed: _openInBrowser,
+        ),
+      ),
+    );
+  }
+
+  /// Запасной путь: открыть файл в браузере.
+  ///
+  /// Если внутри приложения почему-то не скачивается, человек не
+  /// должен остаться без обновления — ссылка ведёт на тот же файл.
+  Future<void> _openInBrowser() async {
+    final url = _lastInfo?.url;
+    if (url == null) return;
+    try {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Не удалось открыть ссылку')),
+        );
+      }
     }
   }
 
@@ -237,7 +281,55 @@ class _UpdateScreenState extends State<UpdateScreen> {
                 ),
               ),
             ),
-          ] else if (_status != null)
+          ] else if (_error != null)
+            Card(
+              color: LuxeColors.danger.withValues(alpha: 0.10),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.error_outline,
+                            color: LuxeColors.danger, size: 20),
+                        const SizedBox(width: 8),
+                        Text('Обновление не установилось',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: dark
+                                  ? LuxeColors.danger
+                                  : const Color(0xFF9B1C1C),
+                            )),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(_error!,
+                        style: TextStyle(
+                            fontSize: 13.5,
+                            color: dark ? Colors.white70 : Colors.black87)),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: _openInBrowser,
+                          icon: const Icon(Icons.open_in_browser, size: 18),
+                          label: const Text('Скачать браузером'),
+                        ),
+                        const SizedBox(width: 8),
+                        if (Platform.isAndroid)
+                          OutlinedButton.icon(
+                            onPressed: UpdateService.openAndroidSettings,
+                            icon: const Icon(Icons.settings, size: 18),
+                            label: const Text('Разрешения'),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else if (_status != null)
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),

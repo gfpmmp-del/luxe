@@ -6,6 +6,10 @@
     <!-- Push-уведомления -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
+    <!-- Установка обновления изнутри приложения.
+         Без этого Android 8+ не даёт открыть системный установщик:
+         установка из неизвестных источников просто блокируется. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
 <!-- Скачивание вложений в папку «Загрузки» -->
 <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
     android:maxSdkVersion="28"/>
@@ -74,6 +78,15 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- На Android 11+ системный установщик не виден приложению,
+             пока он не объявлен здесь. Без этого startActivity
+             выбрасывает ActivityNotFoundException и обновление
+             не ставится, хотя ошибка выглядит как «ничего не
+             произошло». -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:mimeType="application/vnd.android.package-archive"/>
         </intent>
     </queries>
 </manifest>
