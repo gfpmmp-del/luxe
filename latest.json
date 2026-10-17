@@ -1,6 +1,6 @@
 {
-  "version": "1.1.0",
-  "notes": "Новый интерфейс: спокойные цвета вместо кислотных, ровные отступы и скругления. Добавлен общий поиск людей, групп и каналов — вкладка «Контакты» больше не нужна. В списке чатов вместо имён файлов понятные подписи («Фотография», «Голосовое сообщение»), даты на русском.",
-  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.0/luxe.apk",
-  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.0/LuxeMessenger-windows.zip"
+  "version": "1.1.1",
+  "notes": "Исправлено обновление внутри приложения — раньше оно не работало. Файл докачивается целиком (было: пустой APK и тишина вместо ошибки), добавлено разрешение на установку для Android, появилась кнопка «Скачать браузером», если что-то пошло не так.",
+  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.1/luxe.apk",
+  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.1/LuxeMessenger-windows.zip"
 }
