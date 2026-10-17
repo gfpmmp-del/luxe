@@ -55,6 +55,30 @@ class CallService {
     'https://jdjgrczsnhroqjasipai.supabase.co/turn-credentials',
   ];
 
+  /// Ретрансляция, которой можно пользоваться без регистрации и без
+  /// карты. Логин и пароль там общие для всех — сервис и задуман как
+  /// открытый, поэтому прятать их нечего.
+  ///
+  /// Хост именно `relay.metered.ca`. Старое имя `openrelay.metered.ca`
+  /// резолвится в 192.0.2.1 — служебный адрес из документации, то есть
+  /// в никуда; с таким именем звонок шёл бы мимо ретрансляции.
+  ///
+  /// Минусы: чужой сервер и жёсткий лимит скорости. Проверка с этой
+  /// машины показала, что открыт только порт 80 — TCP на 443, 3478 и
+  /// 5349 закрыт. Поэтому первой стоит именно строка с :80.
+  static const List<Map<String, dynamic>> _publicTurn = [
+    {
+      'urls': [
+        'turn:relay.metered.ca:80?transport=tcp',
+        'turn:relay.metered.ca:80?transport=udp',
+        'turn:relay.metered.ca:443?transport=tcp',
+        'turn:relay.metered.ca:3478?transport=udp',
+      ],
+      'username': 'openrelayproject',
+      'credential': 'openrelayproject',
+    },
+  ];
+
   static List<Map<String, dynamic>>? _turnCache;
   static DateTime? _turnAt;
 
@@ -101,7 +125,7 @@ class CallService {
       }
     }
     client.close();
-    debugPrint('Ключи TURN получить не удалось — звонок пойдёт без ретрансляции');
+    debugPrint('Ключи Cloudflare получить не удалось — пойдёт бесплатный TURN');
     return const [];
   }
 
@@ -112,24 +136,24 @@ class CallService {
     ]
   };
 
-  /// Добавить ретрансляцию к списку серверов.
+  /// Собрать список серверов для ICE.
   ///
-  /// STUN пробивает NAT, но голос через него не передать. На сетях,
-  /// где UDP зарезан (мобильный интернет без VPN, закрытые Wi-Fi),
-  /// без TURN звонок не соединяется вовсе.
+  /// Сначала ретрансляция Cloudflare, если ключи заведены, затем
+  /// бесплатная открытая, затем STUN. Порядок не принуждает трафик
+  /// идти через сервер: если прямое соединение возможно, WebRTC
+  /// выберет его сам — ретрансляция остаётся запасным путём.
   Future<void> loadTurn() async {
     try {
-      final servers = await _turnServers();
-      if (servers.isEmpty) return;
-      _rtcConfig = {
-        'iceServers': [
-          ...servers,
-          {'urls': 'stun:stun.l.google.com:19302'},
-          {'urls': 'stun:stun1.l.google.com:19302'},
-        ]
-      };
-      debugPrint('TURN подключён: ${servers.length} серверов, '
-          'например ${(servers.first['urls'] as List).first}');
+      final cloudflare = await _turnServers();
+      final servers = [
+        ...cloudflare,
+        ..._publicTurn,
+        {'urls': 'stun:stun.l.google.com:19302'},
+        {'urls': 'stun:stun1.l.google.com:19302'},
+      ];
+      _rtcConfig = {'iceServers': servers};
+      debugPrint('ICE: ${cloudflare.isEmpty ? "бесплатный TURN" : "Cloudflare TURN"} '
+          '+ открытый ретранслятор + 2 STUN');
     } catch (e) {
       debugPrint('TURN не подключился: $e');
     }
