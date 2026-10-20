@@ -9,7 +9,7 @@ import 'net.dart';
 
 /// WebRTC звонки 1-на-1. Сигналинг — таблица call_signals через Supabase Realtime.
 class CallService {
-  static const int _callTimeoutSeconds = 30;
+  static const int _callTimeoutSeconds = 45;
   RTCPeerConnection? pc;
   MediaStream? localStream;
   final RTCVideoRenderer localRenderer = RTCVideoRenderer();
@@ -21,6 +21,11 @@ class CallService {
   RealtimeChannel? _channel;
   final List<Map<String, dynamic>> _pendingIce = [];
   final Set<String> _addedIce = <String>{};
+
+  /// Последнее состояние ICE — попадает в текст ошибки. По нему
+  /// видно, упало ли соединение на сети или не нашлось ни одного
+  /// рабочего маршрута между абонентами.
+  RTCIceConnectionState? _iceState;
 
   final void Function()? onRemoteStream;
   final void Function(String type)? onSignal;
@@ -46,14 +51,14 @@ class CallService {
 
   CallService({this.onRemoteStream, this.onSignal, this.onError, this.onCallEnded});
 
-  /// Адреса, где воркер отдаёт ключи для ретрансляции звонков.
+  /// Адрес, где воркер отдаёт ключи для ретрансляции.
   ///
-  /// Оба пробуем: сеть может резать один из них, а приложение должно
-  /// работать и там, и там.
-  static const List<String> _turnSources = [
-    'https://luxe-proxy.gfpmmp.workers.dev/turn-credentials',
-    'https://jdjgrczsnhroqjasipai.supabase.co/turn-credentials',
-  ];
+  /// Только один. Второй адрес раньше вёл на сам Supabase
+  /// (`.../turn-credentials`), а такого маршрута у него нет: запрос
+  /// гарантированно получал 404 и просто съедал время на каждом
+  /// звонке.
+  static const String _turnEndpoint =
+      'https://luxe-proxy.gfpmmp.workers.dev/turn-credentials';
 
   /// Ретрансляция, которой можно пользоваться без регистрации и без
   /// карты. Логин и пароль там общие для всех — сервис и задуман как
@@ -80,84 +85,85 @@ class CallService {
   ];
 
   static List<Map<String, dynamic>>? _turnCache;
-  static DateTime? _turnAt;
+  static DateTime? _turnFailedAt;
+  static Future<void>? _warming;
 
-  /// Ключи для ретрансляции. Кэшируем на полчаса: ключ живёт сутки,
-  /// а запрос при каждом звонке — лишняя задержка перед соединением.
-  static Future<List<Map<String, dynamic>>> _turnServers() async {
-    final at = _turnAt;
-    if (_turnCache != null && at != null && DateTime.now().difference(at) < const Duration(minutes: 30)) {
-      return _turnCache!;
-    }
-    final client = Net.buildClient();
-    for (final src in _turnSources) {
-      try {
-        final res = await client
-            .get(Uri.parse(src))
-            .timeout(const Duration(seconds: 8));
-        if (res.statusCode != 200) continue;
-        final body = jsonDecode(res.body);
-        if (body is! Map) continue;
-        final ice = body['iceServers'];
-        // Cloudflare отдаёт СПИСОМ: первым идёт STUN без логина,
-        // вторым — TURN с username и credential. Раньше ждали объект
-        // и тихо получали пустой список — звонки оставались без
-        // ретрансляции.
-        if (ice is! List || ice.isEmpty) continue;
-        final servers = <Map<String, dynamic>>[];
-        for (final entry in ice) {
-          if (entry is! Map) continue;
-          final urls = entry['urls'];
-          if (urls is! List || urls.isEmpty) continue;
-          servers.add({
-            'urls': urls.map((u) => u.toString()).toList(),
-            if (entry['username'] != null) 'username': entry['username'].toString(),
-            if (entry['credential'] != null)
-              'credential': entry['credential'].toString(),
-          });
-        }
-        if (servers.isEmpty) continue;
-        _turnCache = servers;
-        _turnAt = DateTime.now();
-        return _turnCache!;
-      } catch (_) {
-        // Этот адрес недоступен — пробуем следующий
-      }
-    }
-    client.close();
-    debugPrint('Ключи Cloudflare получить не удалось — пойдёт бесплатный TURN');
-    return const [];
-  }
-
-  Map<String, dynamic> _rtcConfig = {
-    'iceServers': [
-      {'urls': 'stun:stun.l.google.com:19302'},
-      {'urls': 'stun:stun1.l.google.com:19302'},
-    ]
-  };
-
-  /// Собрать список серверов для ICE.
+  /// Все серверы ICE: Cloudflare (если ключи уже есть), бесплатный
+  /// открытый ретранслятор и STUN.
   ///
-  /// Сначала ретрансляция Cloudflare, если ключи заведены, затем
-  /// бесплатная открытая, затем STUN. Порядок не принуждает трафик
-  /// идти через сервер: если прямое соединение возможно, WebRTC
-  /// выберет его сам — ретрансляция остаётся запасным путём.
-  Future<void> loadTurn() async {
-    try {
-      final cloudflare = await _turnServers();
-      final servers = [
-        ...cloudflare,
+  /// Собирается мгновенно, без обращения к сети. Именно поэтому
+  /// звонок начинает устанавливаться сразу, а не через полминуты.
+  static List<Map<String, dynamic>> _iceServers() => [
+        ...?_turnCache,
         ..._publicTurn,
         {'urls': 'stun:stun.l.google.com:19302'},
         {'urls': 'stun:stun1.l.google.com:19302'},
       ];
-      _rtcConfig = {'iceServers': servers};
-      debugPrint('ICE: ${cloudflare.isEmpty ? "бесплатный TURN" : "Cloudflare TURN"} '
-          '+ открытый ретранслятор + 2 STUN');
+
+  /// Догрузить ключи Cloudflare фоном.
+  ///
+  /// Раньше ключи забирались прямо во время установки звонка, да ещё
+  /// с двумя адресами и восемью секундами на каждый. Предложение
+  /// уходило собеседнику только на шестнадцатой секунде: входящий
+  /// «появлялся не сразу», а звонящий успевал получить таймаут в
+  /// тридцать секунд и видел «не удалось соединиться». Теперь сеть
+  /// не задерживает звонок: ключи приходят фоном и попадают в
+  /// следующий звонок.
+  static void warmTurn() {
+    if (_warming != null || _turnCache != null) return;
+    final failed = _turnFailedAt;
+    if (failed != null &&
+        DateTime.now().difference(failed) < const Duration(minutes: 10)) {
+      return;
+    }
+    _warming = _fetchTurn();
+  }
+
+  static Future<void> _fetchTurn() async {
+    final client = Net.buildClient();
+    try {
+      final res = await client
+          .get(Uri.parse(_turnEndpoint))
+          .timeout(const Duration(seconds: 3));
+      if (res.statusCode != 200) {
+        _turnFailedAt = DateTime.now();
+        debugPrint('Ключи Cloudflare не выданы: ${res.statusCode}');
+        return;
+      }
+      final body = jsonDecode(res.body);
+      if (body is! Map) return;
+      final ice = body['iceServers'];
+      // Cloudflare отдаёт СПИСКОМ: первым идёт STUN без логина,
+      // вторым — TURN с username и credential. Раньше ждали объект
+      // и тихо получали пустой список — звонки оставались без
+      // ретрансляции.
+      if (ice is! List || ice.isEmpty) return;
+      final servers = <Map<String, dynamic>>[];
+      for (final entry in ice) {
+        if (entry is! Map) continue;
+        final urls = entry['urls'];
+        if (urls is! List || urls.isEmpty) continue;
+        servers.add({
+          'urls': urls.map((u) => u.toString()).toList(),
+          if (entry['username'] != null)
+            'username': entry['username'].toString(),
+          if (entry['credential'] != null)
+            'credential': entry['credential'].toString(),
+        });
+      }
+      if (servers.isEmpty) return;
+      _turnCache = servers;
+      debugPrint('Ключи Cloudflare получены: ${servers.length}');
     } catch (e) {
-      debugPrint('TURN не подключился: $e');
+      _turnFailedAt = DateTime.now();
+      debugPrint('Ключи Cloudflare не получены: $e');
+    } finally {
+      client.close();
+      _warming = null;
     }
   }
+
+  Map<String, dynamic> _rtcConfig = {'iceServers': _iceServers()};
 
   Future<void> initRenderers() async {
     await localRenderer.initialize();
@@ -180,9 +186,9 @@ class CallService {
 
   Future<void> _ensurePeerConnection() async {
     if (pc != null) return;
-    // Ключи ретрансляции забираем до создания соединения: после
-    // создания ICE уже не переспрашивает серверы.
-    await loadTurn();
+    // Список серверов собирается мгновенно, сеть здесь не ждём.
+    // Ключи Cloudflare, если успели догрузиться, уже в нём.
+    _rtcConfig = {'iceServers': _iceServers()};
     pc = await createPeerConnection(_rtcConfig);
     pc!.onTrack = (event) {
       // Рендерер предназначен только для видео. Раньше ему отдавался
@@ -214,6 +220,7 @@ class CallService {
     };
     pc!.onIceConnectionState = (state) {
       if (_callEnded) return;
+      _iceState = state;
       debugPrint('ICE: $state');
       switch (state) {
         case RTCIceConnectionState.RTCIceConnectionStateConnected:
@@ -229,7 +236,7 @@ class CallService {
           // переключилась с Wi-Fi на LTE): убивать по нему звонок нельзя,
           // WebRTC сам восстановит соединение.
           if (!_callEnded) {
-            _endCall(reason: 'Не удалось соединиться');
+            _endCall(reason: 'Не удалось соединиться (${_iceState?.name ?? 'нет'})');
           }
           break;
         default:
@@ -407,6 +414,8 @@ class CallService {
     _chatId = chatId;
     _callEnded = false;
     _resetConnected();
+    // Ключи догружаются в фоне: звонок их не ждёт.
+    warmTurn();
     try {
       // Голосовой режим — до захвата микрофона и до создания соединения
       await _configureCallAudio();
@@ -435,6 +444,7 @@ class CallService {
     _chatId = offerRow['chat_id'] as String;
     _callEnded = false;
     _resetConnected();
+    warmTurn();
     final payload = Map<String, dynamic>.from(offerRow['payload'] as Map);
     try {
       await _configureCallAudio();
@@ -471,14 +481,23 @@ class CallService {
   }
 
   /// Забрать ICE-кандидаты звонящего, отправленные до нашей подписки.
+  ///
+  /// Смотрим только последние минуты. Раньше запрос тянул вообще все
+  /// кандидаты за всю историю чата: на двадцатом звонке их набирались
+  /// сотни, и принятие звонка вязло на их разборе.
   Future<void> _applyStoredCandidates() async {
     try {
+      final since = DateTime.now()
+          .subtract(const Duration(minutes: 2))
+          .toUtc()
+          .toIso8601String();
       final rows = await supabase
           .from('call_signals')
           .select('payload')
           .eq('chat_id', _chatId!)
           .eq('type', 'ice')
           .eq('caller_id', _calleeId!)
+          .gte('created_at', since)
           .order('created_at', ascending: true);
       for (final r in (rows as List)) {
         final p = (r as Map)['payload'];

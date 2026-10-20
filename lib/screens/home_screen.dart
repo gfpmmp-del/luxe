@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../main.dart';
 import '../services/auth_service.dart';
+import '../services/call_service.dart';
 import '../services/chat_service.dart';
 import '../services/media_service.dart';
+import '../services/ring_service.dart';
 import '../theme/luxe_theme.dart';
 import '../widgets/channel_info_panel.dart';
 import '../widgets/luxe_sidebar.dart';
@@ -23,7 +27,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int index = 0;
   final GlobalKey<ScaffoldState> scaffoldKey = GlobalKey<ScaffoldState>();
 
@@ -33,6 +37,17 @@ class _HomeScreenState extends State<HomeScreen> {
   RealtimeChannel? incomingCh;
   Map<String, dynamic>? incomingOffer;
   Map<String, dynamic>? myProfile;
+
+  /// Уже отклонённые или отработанные предложения — чтобы карточка
+  /// не всплывала повторно при догоняющей проверке.
+  final Set<String> _dismissedOffers = {};
+
+  /// Страховка на случай, если Realtime отвалился: раз в 12 секунд
+  /// смотрим, нет ли свежего входящего.
+  Timer? _pollTimer;
+
+  /// Через сколько убрать карточку, если на неё так и не ответили.
+  Timer? _autoHide;
 
   // Открытый чат
   String? chatId;
@@ -44,10 +59,109 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadProfile();
-    incomingCh = CallServiceListen.listenIncoming((offer) {
-      if (mounted) setState(() => incomingOffer = offer);
+    incomingCh = CallServiceListen.listenIncoming(_showIncoming);
+    // Ключи ретрансляции грузим заранее — к первому звонку они уже
+    // будут, и звонок не станет ждать сеть.
+    CallService.warmTurn();
+    // Подписка Realtime могла не успеть к моменту вызова, а пока
+    // приложение было свёрнуто — не работала вовсе. Сразу смотрим,
+    // не звонили ли только что.
+    _checkMissedCall();
+    _pollTimer = Timer.periodic(
+        const Duration(seconds: 12), (_) => _checkMissedCall());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // На iOS свёрнутое приложение приостанавливают, сокет Realtime
+      // умирает, а пропущенные события никто не повторяет. Поэтому
+      // при возврате проверяем звонки руками.
+      _checkMissedCall();
+      _pollTimer ??= Timer.periodic(
+          const Duration(seconds: 12), (_) => _checkMissedCall());
+    } else if (state == AppLifecycleState.paused) {
+      _pollTimer?.cancel();
+      _pollTimer = null;
+    }
+  }
+
+  /// Показать карточку входящего и включить звонок.
+  void _showIncoming(Map<String, dynamic> offer) {
+    if (!mounted || incomingOffer != null) return;
+    setState(() => incomingOffer = offer);
+    RingService.start();
+    // Звонящий сдаётся через 30 секунд. Держать карточку дольше
+    // незачем: ответить на звонок, которого уже нет, нельзя.
+    _autoHide?.cancel();
+    _autoHide = Timer(const Duration(seconds: 35), () {
+      if (mounted) _dismissIncoming();
     });
+  }
+
+  /// Скрыть карточку: ответили, отклонили, или звонок сам кончился.
+  void _dismissIncoming() {
+    _autoHide?.cancel();
+    _autoHide = null;
+    final id = incomingOffer?['id']?.toString();
+    if (id != null && id.isNotEmpty) _dismissedOffers.add(id);
+    RingService.stop();
+    if (mounted) setState(() => incomingOffer = null);
+  }
+
+  /// Догнать звонок, который пришёл, пока Realtime молчал.
+  Future<void> _checkMissedCall() async {
+    if (!mounted || incomingOffer != null) return;
+    try {
+      final since = DateTime.now()
+          .subtract(const Duration(seconds: 35))
+          .toUtc()
+          .toIso8601String();
+      final rows = await supabase
+          .from('call_signals')
+          .select()
+          .eq('callee_id', AuthService.myId)
+          .eq('type', 'offer')
+          .gte('created_at', since)
+          .order('created_at', ascending: false)
+          .limit(3);
+      for (final r in (rows as List)) {
+        final offer = Map<String, dynamic>.from(r as Map);
+        final id = offer['id']?.toString() ?? '';
+        if (id.isEmpty || _dismissedOffers.contains(id)) continue;
+
+        // Если после предложения уже был ответ или сброс — звонок
+        // неактуален, показывать его нельзя.
+        final later = await supabase
+            .from('call_signals')
+            .select('type')
+            .eq('chat_id', offer['chat_id'])
+            .gt('created_at', offer['created_at'])
+            .inFilter('type', ['answer', 'reject', 'hangup'])
+            .limit(1);
+        if ((later as List).isNotEmpty) {
+          _dismissedOffers.add(id);
+          continue;
+        }
+        _showIncoming(offer);
+        return;
+      }
+    } catch (e) {
+      // Тихо: проверка повторяется сама, шуметь в интерфейсе не о чем.
+      debugPrint('Проверка входящих: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _pollTimer?.cancel();
+    _autoHide?.cancel();
+    RingService.stop();
+    incomingCh?.unsubscribe();
+    super.dispose();
   }
 
   Future<void> _loadProfile() async {
@@ -59,12 +173,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (row != null && mounted) {
       setState(() => myProfile = Map<String, dynamic>.from(row as Map));
     }
-  }
-
-  @override
-  void dispose() {
-    incomingCh?.unsubscribe();
-    super.dispose();
   }
 
   Future<void> _openChat(Map<String, dynamic> chat) async {
@@ -237,7 +345,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (incomingOffer != null)
             IncomingCallCard(
               offer: incomingOffer!,
-              onDismiss: () => setState(() => incomingOffer = null),
+              onDismiss: _dismissIncoming,
             ),
         ],
       ),

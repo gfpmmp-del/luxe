@@ -1,6 +1,6 @@
 {
-  "version": "1.1.2",
-  "notes": "Медиа больше не зависает молча: у загрузок появились таймауты и понятный текст вместо вечного «Загрузка…». Звонки получили ретрансляцию TURN — раньше был только STUN, который не умеет передавать голос без VPN.",
-  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.2/luxe.apk",
-  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.2/LuxeMessenger-windows.zip"
+  "version": "1.1.3",
+  "notes": "Звонки больше не ждут сеть: ключи ретрансляции грузятся заранее, поэтому входящий появляется сразу, а не через полминуты. Входящий звонок теперь звучит и вибрирует.",
+  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.3/luxe.apk",
+  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.3/LuxeMessenger-windows.zip"
 }
