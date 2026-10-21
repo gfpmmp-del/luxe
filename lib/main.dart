@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'config/supabase_config.dart';
 import 'screens/auth_screen.dart';import 'screens/home_screen.dart';
+import 'services/media_service.dart';
 import 'services/net.dart';
 import 'theme/luxe_theme.dart';
 
@@ -90,6 +91,10 @@ class _LuxeAppState extends State<LuxeApp> {
     }
     SupabaseConfig.picked = picked;
     debugPrint('Рабочий адрес сервера: $picked');
+
+    // Если ходим через прокси — сразу узнаём, умеет ли он отдавать файлы
+    // целиком. Старый не умеет, и медиа тогда качается кусками.
+    await MediaService.probeProxy();
 
     try {
       await Supabase.initialize(

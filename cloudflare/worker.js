@@ -92,6 +92,25 @@ export default {
       return handleTurnCredentials(request, env);
     }
 
+    // Проверка версии прокси.
+    //
+    // Приложение спрашивает её при запуске, чтобы понять, можно ли
+    // качать файлы одним запросом. У старой версии здесь был обычный
+    // проксируемый путь, и она отвечала 404 от Supabase.
+    if (url.pathname === '/health') {
+      return new Response(
+        JSON.stringify({ ok: true, storage: 'buffered', version: 3 }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-store',
+          },
+        }
+      );
+    }
+
     // WebSocket идёт мимо обычного fetch, для него свой маршрут.
     if (isWebSocketUpgrade(request)) {
       return handleWebSocket(request, url);

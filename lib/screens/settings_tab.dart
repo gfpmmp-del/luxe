@@ -9,6 +9,7 @@ import '../services/premium_service.dart';
 import '../services/update_service.dart';
 import '../theme/luxe_theme.dart';
 import '../widgets/luxe_widgets.dart';
+import 'diagnostics_screen.dart';
 import 'premium_screen.dart';
 import 'stickers_screen.dart';
 import 'update_screen.dart';
@@ -338,6 +339,14 @@ class SettingsTabState extends State<SettingsTab> {
                 subtitle: const Text('Проверить новую версию'),
                 onTap: () => Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const UpdateScreen())),
+              ),
+              ListTile(
+                leading:
+                    const Icon(Icons.wifi_tethering_rounded, color: LuxeColors.tgBlue),
+                title: const Text('Проверка связи'),
+                subtitle: const Text('Сервер и файлы: что отвечает на этом устройстве'),
+                onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const DiagnosticsScreen())),
               ),
               ListTile(
                 leading: const Icon(Icons.emoji_emotions_outlined,

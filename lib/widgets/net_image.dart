@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -88,7 +89,12 @@ class _NetImageState extends State<NetImage> {
     _grace = Timer(const Duration(seconds: 6), () {
       if (mounted && !_failed) setState(() => _slow = true);
     });
-    _timer = Timer(Duration(seconds: widget.timeoutSeconds), _nextOrFail);
+    // Через старый прокси файл тянут кусками — это дольше обычного,
+    // поэтому даём больше времени, чем одному запросу.
+    final seconds = MediaService.needsChunks(_urls[_index])
+        ? 60
+        : widget.timeoutSeconds;
+    _timer = Timer(Duration(seconds: seconds), _nextOrFail);
   }
 
   /// Следующий адрес, а если их больше нет — заглушка.
@@ -164,9 +170,37 @@ class _NetImageState extends State<NetImage> {
       );
     }
 
+    final current = _urls[_index];
+
+    // Через старый прокси одним запросом файл не доезжает — качаем
+    // кусками и показываем уже готовые байты.
+    if (MediaService.needsChunks(current)) {
+      return _BytesImage(
+        key: ValueKey('$current#$_attempt'),
+        url: current,
+        width: widget.width,
+        height: widget.height,
+        fit: widget.fit,
+        bg: bg,
+        dark: dark,
+        onLoaded: () {
+          _timer?.cancel();
+          _grace?.cancel();
+          if (mounted && _slow) setState(() => _slow = false);
+        },
+        onError: () {
+          _timer?.cancel();
+          _grace?.cancel();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _nextOrFail();
+          });
+        },
+      );
+    }
+
     return Image.network(
-      _urls[_index],
-      key: ValueKey('${_urls[_index]}#$_attempt'),
+      current,
+      key: ValueKey('$current#$_attempt'),
       width: widget.width,
       height: widget.height,
       fit: widget.fit,
@@ -231,6 +265,132 @@ class _NetImageState extends State<NetImage> {
               height: 20,
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
+    );
+  }
+}
+
+/// Картинка, которую сначала целиком скачали в память.
+///
+/// Нужна только для адреса через старый прокси: он отдаёт файл
+/// обрезанным, а `Image.network` не умеет добирать остаток. Здесь байты
+/// приходят кусками и склеиваются в [MediaService].
+class _BytesImage extends StatefulWidget {
+  final String url;
+  final double? width;
+  final double? height;
+  final BoxFit fit;
+  final Color bg;
+  final bool dark;
+  final VoidCallback onLoaded;
+  final VoidCallback onError;
+
+  const _BytesImage({
+    super.key,
+    required this.url,
+    required this.width,
+    required this.height,
+    required this.fit,
+    required this.bg,
+    required this.dark,
+    required this.onLoaded,
+    required this.onError,
+  });
+
+  @override
+  State<_BytesImage> createState() => _BytesImageState();
+}
+
+class _BytesImageState extends State<_BytesImage> {
+  Uint8List? _bytes;
+  bool _failed = false;
+  bool _slow = false;
+  Timer? _grace;
+
+  @override
+  void initState() {
+    super.initState();
+    _grace = Timer(const Duration(seconds: 6), () {
+      if (mounted) setState(() => _slow = true);
+    });
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final bytes = await MediaService.imageBytes(widget.url);
+      if (!mounted) return;
+      _grace?.cancel();
+      setState(() => _bytes = bytes);
+      widget.onLoaded();
+    } catch (_) {
+      if (!mounted) return;
+      _grace?.cancel();
+      setState(() => _failed = true);
+      widget.onError();
+    }
+  }
+
+  @override
+  void dispose() {
+    _grace?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_bytes != null) {
+      return Image.memory(
+        _bytes!,
+        width: widget.width,
+        height: widget.height,
+        fit: widget.fit,
+        gaplessPlayback: true,
+        errorBuilder: (c, e, s) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) widget.onError();
+          });
+          return _box(icon: Icons.image_outlined);
+        },
+      );
+    }
+
+    if (_failed) return _box(icon: Icons.image_outlined);
+
+    return Container(
+      width: widget.width,
+      height: widget.height,
+      color: widget.bg,
+      alignment: Alignment.center,
+      child: _slow
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(height: 4),
+                const Text('Загружаем…',
+                    style: TextStyle(fontSize: 10, color: LuxeColors.danger)),
+              ],
+            )
+          : const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+    );
+  }
+
+  Widget _box({required IconData icon}) {
+    return Container(
+      width: widget.width,
+      height: widget.height,
+      color: widget.bg,
+      alignment: Alignment.center,
+      child: Icon(icon,
+          size: 22,
+          color: widget.dark ? Colors.white24 : Colors.black26),
     );
   }
 }

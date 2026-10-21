@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -259,6 +262,248 @@ class MediaService {
     return list.isEmpty ? url : list.first;
   }
 
+  // ── Обход старого прокси ────────────────────────────────────────────
+  //
+  // У воркера, который сейчас развёрнут на Cloudflare, есть беда: файл
+  // больше ~22 КБ он отдаёт не целиком. Заголовки приходят правильные
+  // (Content-Length 193933), а тело обрывается на 22 168 байтах и
+  // клиент ждёт остаток до таймаута. Именно из-за этого у людей с
+  // заблокированным Supabase не открывались ни аватарки, ни фото, ни
+  // голосовые: чаты шли через воркер, а файлы через него не доезжали.
+  //
+  // Новый worker.js собирает файл в памяти и отдаёт целиком, но пока
+  // его не перезалили на Cloudflare — работаем в обход: просим файл
+  // кусками по 16 КБ. Каждый такой кусок доезжает полностью, а вместе
+  // они складываются в целый файл. Как только воркер обновят, флаг
+  // [proxyBuffered] станет true и приложение вернётся к обычной
+  // загрузке одним запросом.
+
+  /// Обновлён ли воркер и умеет ли он отдавать файлы целиком.
+  static bool proxyBuffered = false;
+
+  /// Размер куска. 22 КБ — предел, после которого старый воркер рвёт
+  /// соединение; берём с запасом.
+  static const int chunkSize = 16 * 1024;
+
+  /// Идёт ли приложение через воркер.
+  static bool get viaProxy => SupabaseConfig.viaProxy;
+
+  /// Нужно ли тянуть этот адрес кусками.
+  static bool needsChunks(String? url) {
+    if (url == null || url.isEmpty) return false;
+    if (proxyBuffered) return false;
+    return url.contains('workers.dev');
+  }
+
+  /// Спросить у воркера, обновлён ли он.
+  ///
+  /// Новый воркер отвечает на /health строкой «buffered». Старый такого
+  /// адреса не знает и отдаёт 404 от Supabase — значит, куски.
+  static Future<void> probeProxy() async {
+    if (!SupabaseConfig.viaProxy) {
+      proxyBuffered = false;
+      return;
+    }
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 4)
+      ..idleTimeout = const Duration(seconds: 4);
+    try {
+      final req = await client
+          .getUrl(Uri.parse('${SupabaseConfig.workerUrl}/health'))
+          .timeout(const Duration(seconds: 4));
+      final res = await req.close().timeout(const Duration(seconds: 4));
+      final body =
+          await res.transform(const Utf8Decoder()).join().timeout(const Duration(seconds: 4));
+      proxyBuffered = res.statusCode == 200 && body.contains('buffered');
+      debugPrint('Прокси: ${proxyBuffered ? 'обновлён' : 'старый, качаем кусками'}');
+    } catch (e) {
+      proxyBuffered = false;
+      debugPrint('Прокси не ответил на проверку: $e');
+    } finally {
+      client.close();
+    }
+  }
+
+  static final Map<String, Uint8List> _images = {};
+  static final Map<String, Future<Uint8List>> _loading = {};
+  static int _imagesBytes = 0;
+  /// Больше 32 МБ картинок в памяти не держим: на телефоне это уже
+  /// заметно, а листать чат с сотней фотографий никто не станет.
+  static const int _imagesLimit = 32 * 1024 * 1024;
+
+  /// Байты картинки с кэшем в памяти: один и тот же аватар не качается
+  /// заново при каждой перерисовке списка.
+  static Future<Uint8List> imageBytes(String url) {
+    final hit = _images[url];
+    if (hit != null) return Future.value(hit);
+    final running = _loading[url];
+    if (running != null) return running;
+
+    final future = fetchBytes(url).then((bytes) {
+      _imagesBytes += bytes.length;
+      _images[url] = bytes;
+      while (_imagesBytes > _imagesLimit && _images.length > 1) {
+        final key = _images.keys.first;
+        final old = _images.remove(key);
+        _imagesBytes -= old?.length ?? 0;
+      }
+      return bytes;
+    }).whenComplete(() => _loading.remove(url));
+    _loading[url] = future;
+    return future;
+  }
+
+  /// Прочитать файл целиком. Сам выбирает способ: обычный запрос или
+  /// куски, если прокси старый.
+  static Future<Uint8List> fetchBytes(String url, {bool? chunked}) async {
+    final targets = candidates(url);
+    Object? last;
+    for (final target in (targets.isEmpty ? [url] : targets)) {
+      final byChunks = chunked ?? needsChunks(target);
+      try {
+        return byChunks
+            ? await _rangedBytes(target)
+            : await _plainBytes(target);
+      } catch (e) {
+        last = e;
+        debugPrint('Не удалось прочитать $target: $e');
+      }
+    }
+    throw Exception(last?.toString() ?? 'Не удалось загрузить файл');
+  }
+
+  static Future<Uint8List> _plainBytes(String url) async {
+    final client = HttpClient()
+      ..connectionTimeout = Net.connectTimeout
+      ..idleTimeout = Net.idleTimeout;
+    try {
+      final req = await client.getUrl(Uri.parse(url)).timeout(Net.connectTimeout);
+      final res = await req.close().timeout(Net.connectTimeout);
+      if (res.statusCode != 200) {
+        throw Exception('Сервер ответил кодом ${res.statusCode}');
+      }
+      final bytes = await _readAll(res).timeout(const Duration(seconds: 60));
+      final expected = res.contentLength;
+      if (expected > 0 && bytes.length < expected) {
+        throw Exception('Пришло ${bytes.length} из $expected байт');
+      }
+      return bytes;
+    } finally {
+      client.close();
+    }
+  }
+
+  static Future<Uint8List> _rangedBytes(String url) async {
+    final first = await _rangeOnce(url, 0, chunkSize - 1);
+    final total = first.total;
+    if (total <= 0) return first.bytes;
+    // Очень крупные файлы кусками тянуть бессмысленно: тысячи запросов.
+    if (total > 80 * 1024 * 1024) {
+      throw Exception('Файл слишком большой для загрузки кусками');
+    }
+    if (first.bytes.length >= total) return first.bytes;
+
+    final out = Uint8List(total);
+    out.setRange(0, first.bytes.length, first.bytes);
+
+    final starts = <int>[];
+    for (var s = chunkSize; s < total; s += chunkSize) {
+      starts.add(s);
+    }
+    var next = 0;
+    Future<void> worker() async {
+      while (true) {
+        final i = next++;
+        if (i >= starts.length) return;
+        final from = starts[i];
+        final to = min(from + chunkSize, total) - 1;
+        final part = await _rangeOnce(url, from, to);
+        final want = to - from + 1;
+        if (part.bytes.length != want) {
+          throw Exception('Кусок пришёл не целиком');
+        }
+        out.setRange(from, from + part.bytes.length, part.bytes);
+      }
+    }
+
+    // Четыре потока: и быстро, и Cloudflare не заваливаем.
+    await Future.wait(List.generate(4, (_) => worker()));
+    return out;
+  }
+
+  static Future<({Uint8List bytes, int total})> _rangeOnce(
+      String url, int from, int to) async {
+    // Клиент на каждый кусок — не прихоть. Cloudflare после ответа
+    // оставляет соединение в таком состоянии, что следующий запрос по
+    // нему уходит в никуда и висит до таймаута. С новым соединением
+    // каждый кусок приходит за сотые доли секунды.
+    final client = HttpClient()
+      ..connectionTimeout = Net.connectTimeout
+      ..idleTimeout = const Duration(seconds: 10);
+    try {
+      final req =
+          await client.getUrl(Uri.parse(url)).timeout(Net.connectTimeout);
+      req.headers.set('Range', 'bytes=$from-$to');
+      // Сжатие на этом пути только мешает: заголовок длины относится
+      // к исходному файлу, а байты приходят упакованными.
+      req.headers.set('Accept-Encoding', 'identity');
+      final res = await req.close().timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) {
+        // Прокси не понял Range и пытается отдать всё целиком — на нём
+        // это всё равно оборвётся.
+        throw Exception('Прокси не поддерживает Range');
+      }
+      if (res.statusCode != 206) {
+        throw Exception('Сервер ответил кодом ${res.statusCode}');
+      }
+      final bytes = await _readAll(res).timeout(const Duration(seconds: 15));
+
+      var total = res.contentLength;
+      final range = res.headers.value('content-range');
+      if (range != null) {
+        final slash = range.lastIndexOf('/');
+        if (slash > 0) {
+          total = int.tryParse(range.substring(slash + 1)) ?? total;
+        }
+      }
+      return (bytes: bytes, total: total);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static Future<Uint8List> _readAll(HttpClientResponse res) async {
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in res) {
+      builder.add(chunk);
+    }
+    return builder.takeBytes();
+  }
+
+  /// Скачать файл во временную папку и вернуть путь.
+  ///
+  /// Нужно плеерам: они не умеют тянуть кусками, а через старый воркер
+  /// целый файл не приходит.
+  static final Map<String, Future<String>> _copying = {};
+
+  static Future<String> localCopy(String url) {
+    final running = _copying[url];
+    if (running != null) return running;
+    final job = _localCopyOne(url).whenComplete(() => _copying.remove(url));
+    _copying[url] = job;
+    return job;
+  }
+
+  static Future<String> _localCopyOne(String url) async {
+    final dir = await getTemporaryDirectory();
+    final name = 'luxe-${url.hashCode}-${url.split('/').last}';
+    final file = File('${dir.path}/$name');
+    if (file.existsSync() && file.lengthSync() > 0) return file.path;
+    final bytes = await fetchBytes(url);
+    await file.writeAsBytes(bytes, flush: true);
+    return file.path;
+  }
+
   /// Починить ссылку в готовой строке сообщения или профиля.
   ///
   /// Так починятся и те сообщения, что уже лежат в памяти на телефоне,
@@ -321,6 +566,15 @@ class MediaService {
   }
 
   static Future<String> _downloadOne(String url, String fileName) async {
+    final target = await _downloadTarget(fileName);
+
+    // Старый прокси присылает файл обрезанным — тянем кусками.
+    if (needsChunks(url)) {
+      final bytes = await _rangedBytes(url);
+      await target.writeAsBytes(bytes, flush: true);
+      return target.path;
+    }
+
     final client = HttpClient()
       ..connectionTimeout = Net.connectTimeout
       ..idleTimeout = Net.idleTimeout;
@@ -332,21 +586,6 @@ class MediaService {
       if (res.statusCode != 200) {
         throw Exception('Сервер ответил кодом ${res.statusCode}');
       }
-
-      // Android — публичная папка «Загрузки», остальные — «Загрузки» пользователя
-      final dir = Platform.isAndroid
-          ? await getExternalStorageDirectory()
-          : await getDownloadsDirectory();
-      final base = dir ?? await getApplicationDocumentsDirectory();
-
-      // Имя файла без служебного префикса загрузки
-      var name = fileName;
-      final i = name.lastIndexOf('-');
-      if (i > 0 && i < name.length - 1) {
-        final tail = name.substring(i + 1);
-        if (RegExp(r'^\d+\.').hasMatch(tail)) name = tail;
-      }
-      final target = File('${base.path}/$name');
 
       final sink = target.openWrite();
       // Файл может качаться долго, поэтому потолок на поток данных
@@ -360,6 +599,23 @@ class MediaService {
     } finally {
       client.close();
     }
+  }
+
+  static Future<File> _downloadTarget(String fileName) async {
+    // Android — публичная папка «Загрузки», остальные — «Загрузки» пользователя
+    final dir = Platform.isAndroid
+        ? await getExternalStorageDirectory()
+        : await getDownloadsDirectory();
+    final base = dir ?? await getApplicationDocumentsDirectory();
+
+    // Имя файла без служебного префикса загрузки
+    var name = fileName;
+    final i = name.lastIndexOf('-');
+    if (i > 0 && i < name.length - 1) {
+      final tail = name.substring(i + 1);
+      if (RegExp(r'^\d+\.').hasMatch(tail)) name = tail;
+    }
+    return File('${base.path}/$name');
   }
 
   /// Длительность аудио/видео файла в секундах. 0 — определить не удалось.

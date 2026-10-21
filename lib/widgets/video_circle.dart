@@ -1,4 +1,6 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:io';
+
+import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../services/media_service.dart';
@@ -43,7 +45,10 @@ class _VideoCircleState extends State<VideoCircle> {
   Future<void> _init() async {
     _playable = MediaService.fixUrl(widget.url) ?? widget.url;
     try {
-      final c = VideoPlayerController.networkUrl(Uri.parse(_playable));
+      final c = MediaService.needsChunks(_playable)
+          ? VideoPlayerController.file(
+              File(await MediaService.localCopy(_playable)))
+          : VideoPlayerController.networkUrl(Uri.parse(_playable));
       await c.initialize();
       await c.setLooping(true);
       await c.setVolume(0); // превью всегда без звука
@@ -173,7 +178,10 @@ class _CircleViewerState extends State<_CircleViewer> {
 
   Future<void> _init() async {
     try {
-      final c = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      final c = MediaService.needsChunks(widget.url)
+          ? VideoPlayerController.file(
+              File(await MediaService.localCopy(widget.url)))
+          : VideoPlayerController.networkUrl(Uri.parse(widget.url));
       await c.initialize();
       await c.setLooping(true);
       await c.play(); // здесь со звуком

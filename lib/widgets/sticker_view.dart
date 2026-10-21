@@ -1,8 +1,11 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
 import 'package:lottie/lottie.dart';
 
 import '../services/media_service.dart';
 import '../theme/luxe_theme.dart';
+import 'net_image.dart';
 
 /// Показ стикера: Lottie, GIF или статичная картинка.
 ///
@@ -36,37 +39,32 @@ class StickerView extends StatelessWidget {
         }
         return ClipRRect(
           borderRadius: BorderRadius.circular(12),
-          child: Lottie.network(
-            fixed,
-            width: size,
-            height: size,
-            repeat: animate,
-            fit: BoxFit.contain,
-            // Сеть может не ответить — показываем пустое место,
-            // а не ошибку на весь экран.
-            errorBuilder: (_, __, ___) => SizedBox(width: size, height: size),
-          ),
+          child: MediaService.needsChunks(fixed)
+              ? _LottieBytes(url: fixed, size: size, animate: animate)
+              : Lottie.network(
+                  fixed,
+                  width: size,
+                  height: size,
+                  repeat: animate,
+                  fit: BoxFit.contain,
+                  // Сеть может не ответить — показываем пустое место,
+                  // а не ошибку на весь экран.
+                  errorBuilder: (_, __, ___) =>
+                      SizedBox(width: size, height: size),
+                ),
         );
       default:
-        return SizedBox(
+        return NetImage(
+          fixed,
           width: size,
           height: size,
-          child: Image.network(
-            fixed,
+          fit: BoxFit.contain,
+          // GIF и WebP с анимацией играют сами по себе.
+          timeoutSeconds: 15,
+          fallback: SizedBox(
             width: size,
             height: size,
-            fit: BoxFit.contain,
-            // GIF и WebP с анимацией играют сами по себе.
-            gaplessPlayback: true,
-            errorBuilder: (_, __, ___) => _fallback(context, Icons.broken_image_outlined, ''),
-            loadingBuilder: (c, child, progress) {
-              if (progress == null) return child;
-              return SizedBox(
-                width: size * 0.4,
-                height: size * 0.4,
-                child: const CircularProgressIndicator(strokeWidth: 2),
-              );
-            },
+            child: _fallback(context, Icons.broken_image_outlined, ''),
           ),
         );
     }
@@ -96,6 +94,59 @@ class StickerView extends StatelessWidget {
                 ),
         ),
       ),
+    );
+  }
+}
+
+/// Lottie, скачанный кусками: `Lottie.network` не умеет добирать
+/// оборванный ответ, а через старый прокси JSON приходит не целиком.
+class _LottieBytes extends StatefulWidget {
+  final String url;
+  final double size;
+  final bool animate;
+
+  const _LottieBytes({
+    required this.url,
+    required this.size,
+    required this.animate,
+  });
+
+  @override
+  State<_LottieBytes> createState() => _LottieBytesState();
+}
+
+class _LottieBytesState extends State<_LottieBytes> {
+  Uint8List? _bytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final bytes = await MediaService.imageBytes(widget.url);
+      if (mounted) setState(() => _bytes = bytes);
+    } catch (_) {
+      // Останется пустое место — как и при ошибке сети.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _bytes;
+    if (bytes == null) {
+      return SizedBox(width: widget.size, height: widget.size);
+    }
+    return Lottie.memory(
+      bytes,
+      width: widget.size,
+      height: widget.size,
+      repeat: widget.animate,
+      fit: BoxFit.contain,
+      errorBuilder: (_, __, ___) =>
+          SizedBox(width: widget.size, height: widget.size),
     );
   }
 }

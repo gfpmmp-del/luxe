@@ -6,6 +6,8 @@ import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
+import 'media_service.dart';
+
 /// Голосовые сообщения: запись с микрофона и воспроизведение.
 ///
 /// Запись и воспроизведение разведены по разным объектам намеренно:
@@ -257,7 +259,14 @@ class VoicePlayer {
     await stop();
     try {
       _currentUrl = url;
-      await _player.setUrl(url);
+      if (MediaService.needsChunks(url)) {
+        // Старый прокси рвёт файл на 22 КБ — сначала скачиваем целиком,
+        // иначе плеер получает обрезанное голосовое.
+        final path = await MediaService.localCopy(url);
+        await _player.setFilePath(path);
+      } else {
+        await _player.setUrl(url);
+      }
       await _player.play();
     } catch (e) {
       debugPrint('Не удалось воспроизвести голосовое: $e');

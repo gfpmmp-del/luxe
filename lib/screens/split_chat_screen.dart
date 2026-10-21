@@ -1072,7 +1072,7 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
               Center(
                 child: InteractiveViewer(
                   maxScale: 5,
-                  child: Image.network(url),
+                  child: NetImage(url, fit: BoxFit.contain, timeoutSeconds: 20),
                 ),
               ),
               Positioned(
