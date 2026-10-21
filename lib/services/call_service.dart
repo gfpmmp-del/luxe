@@ -49,7 +49,12 @@ class CallService {
     _connectedNotified = false;
   }
 
-  CallService({this.onRemoteStream, this.onSignal, this.onError, this.onCallEnded});
+  CallService({this.onRemoteStream, this.onSignal, this.onError, this.onCallEnded, this.onAnswered});
+
+  /// Собеседник принял звонок. Вызывается по сигналу `answer`, ещё до
+  /// того как установится медиапоток: экран должен сразу перестать
+  /// писать «Вызов...», иначе звонящему кажется, что его не слышат.
+  final void Function()? onAnswered;
 
   /// Адрес, где воркер отдаёт ключи для ретрансляции.
   ///
@@ -590,14 +595,23 @@ class CallService {
     switch (type) {
       case 'answer':
         if (pc != null) {
-          await pc!.setRemoteDescription(RTCSessionDescription(
-            payload['sdp'] as String,
-            payload['type'] as String,
-          ));
-          for (final ice in _pendingIce) {
-            await _addCandidateFromMap(ice);
+          try {
+            await pc!.setRemoteDescription(RTCSessionDescription(
+              payload['sdp'] as String,
+              payload['type'] as String,
+            ));
+            for (final ice in _pendingIce) {
+              await _addCandidateFromMap(ice);
+            }
+            _pendingIce.clear();
+            // Собеседник ответил. Сообщаем экрану сразу, не дожидаясь
+            // медиапотока: иначе звонящий продолжает видеть «Вызов...»
+            // и думает, что его не слышат.
+            onAnswered?.call();
+          } catch (e) {
+            debugPrint('Ответ на звонок не применился: $e');
+            _endCall(reason: 'Не удалось принять ответ собеседника');
           }
-          _pendingIce.clear();
         }
         break;
       case 'ice':

@@ -2,28 +2,41 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../services/media_service.dart';
 import '../theme/luxe_theme.dart';
 
-/// Картинка из сети, которая умеет сдаваться.
+/// Картинка из сети, которая умеет сдаваться и пробовать другой адрес.
 ///
-/// У `Image.network` нет таймаута: если соединение не рвётся, а просто
-/// висит, спиннер крутится вечно и человек не понимает, что картинку
-/// не грузит сеть. Здесь появляется обратный отсчёт и кнопка
-/// «Не открылось — повторить».
+/// У `Image.network` нет ни таймаута, ни запасного варианта: если
+/// соединение не рвётся, а просто висит, спиннер крутится вечно.
+/// Здесь адрес перебирается по очереди — сначала тот, через который
+/// приложение сейчас ходит на сервер, затем второй. Если не вышло
+/// ни там, ни там, показывается понятная заглушка с повтором.
 class NetImage extends StatefulWidget {
   final String url;
+
+  /// Готовый список адресов. Если не задан, берётся из
+  /// [MediaService.candidates].
+  final List<String>? urls;
+
   final BoxFit fit;
   final double? width;
   final double? height;
   final int timeoutSeconds;
 
+  /// Что показать, когда не открылось ничего. Например, букву
+  /// на месте аватарки.
+  final Widget? fallback;
+
   const NetImage(
     this.url, {
     super.key,
+    this.urls,
     this.fit = BoxFit.cover,
     this.width,
     this.height,
-    this.timeoutSeconds = 15,
+    this.timeoutSeconds = 9,
+    this.fallback,
   });
 
   @override
@@ -31,8 +44,9 @@ class NetImage extends StatefulWidget {
 }
 
 class _NetImageState extends State<NetImage> {
-  /// Пока хоть какие-то байты идут, показываем обычную загрузку:
-  /// пугать человека раньше времени незачем.
+  late List<String> _urls;
+  int _index = 0;
+  int _attempt = 0;
   bool _slow = false;
   bool _failed = false;
   Timer? _timer;
@@ -41,15 +55,27 @@ class _NetImageState extends State<NetImage> {
   @override
   void initState() {
     super.initState();
+    _urls = _buildList();
     _arm();
+  }
+
+  List<String> _buildList() {
+    final given = widget.urls;
+    final list = (given != null && given.isNotEmpty)
+        ? given
+        : MediaService.candidates(widget.url);
+    return list.isEmpty ? [widget.url] : list;
   }
 
   @override
   void didUpdateWidget(NetImage old) {
     super.didUpdateWidget(old);
-    if (old.url != widget.url) {
+    if (old.url != widget.url || old.urls != widget.urls) {
+      _index = 0;
+      _attempt++;
       _slow = false;
       _failed = false;
+      _urls = _buildList();
       _arm();
     }
   }
@@ -57,25 +83,42 @@ class _NetImageState extends State<NetImage> {
   void _arm() {
     _grace?.cancel();
     _timer?.cancel();
-    // Сначала просто предупреждение: вдруг файл большой и идёт
-    // медленно, ругаться рано.
-    _grace = Timer(const Duration(seconds: 8), () {
-      if (mounted) setState(() => _slow = true);
+    // Сначала просто предупреждение: файл может быть большим и идти
+    // медленно, ругаться раньше времени незачем.
+    _grace = Timer(const Duration(seconds: 6), () {
+      if (mounted && !_failed) setState(() => _slow = true);
     });
-    _timer = Timer(Duration(seconds: widget.timeoutSeconds), () {
-      if (mounted) setState(() => _failed = true);
-    });
+    _timer = Timer(Duration(seconds: widget.timeoutSeconds), _nextOrFail);
+  }
+
+  /// Следующий адрес, а если их больше нет — заглушка.
+  void _nextOrFail() {
+    if (!mounted) return;
+    if (_index < _urls.length - 1) {
+      setState(() {
+        _index++;
+        _attempt++;
+        _slow = false;
+      });
+      _arm();
+    } else {
+      setState(() {
+        _failed = true;
+        _slow = false;
+      });
+    }
   }
 
   void _retry() {
-    _slow = false;
-    _failed = false;
+    if (!mounted) return;
+    setState(() {
+      _index = 0;
+      _attempt++;
+      _failed = false;
+      _slow = false;
+    });
     _arm();
-    // Ключ меняется — виджет перезапрашивает файл заново.
-    setState(() => _attempt++);
   }
-
-  int _attempt = 0;
 
   @override
   void dispose() {
@@ -91,6 +134,8 @@ class _NetImageState extends State<NetImage> {
     final bg = dark ? Colors.white10 : Colors.black12;
 
     if (_failed) {
+      final custom = widget.fallback;
+      if (custom != null) return custom;
       return GestureDetector(
         onTap: _retry,
         child: Container(
@@ -102,14 +147,16 @@ class _NetImageState extends State<NetImage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(Icons.cloud_off_rounded,
-                  size: 26, color: dark ? Colors.white38 : Colors.black38),
-              const SizedBox(height: 6),
-              const Text('Не открылось',
-                  style: TextStyle(fontSize: 12)),
-              const SizedBox(height: 2),
-              Text('Нажмите, чтобы повторить',
+                  size: 24, color: dark ? Colors.white38 : Colors.black38),
+              const SizedBox(height: 4),
+              Text('Не открылось',
                   style: TextStyle(
                       fontSize: 11,
+                      color: dark ? Colors.white54 : Colors.black54)),
+              Text('Нажмите, чтобы повторить',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontSize: 9,
                       color: dark ? Colors.white38 : Colors.black45)),
             ],
           ),
@@ -118,37 +165,42 @@ class _NetImageState extends State<NetImage> {
     }
 
     return Image.network(
-      widget.url,
-      key: ValueKey('${widget.url}#$_attempt'),
+      _urls[_index],
+      key: ValueKey('${_urls[_index]}#$_attempt'),
       width: widget.width,
       height: widget.height,
       fit: widget.fit,
       gaplessPlayback: true,
       loadingBuilder: (c, child, progress) {
-        // Получили хоть какие-то байты — снимаем таймер.
+        // Пошли байты — снимаем все таймеры: загрузка живая.
         if (progress != null && (_slow || _failed)) {
           _timer?.cancel();
           _grace?.cancel();
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) setState(() { _slow = false; _failed = false; });
+            if (mounted) {
+              setState(() {
+                _slow = false;
+                _failed = false;
+              });
+            }
           });
         }
         if (progress == null) return child;
-        if (!_slow) return _spinner(bg, dark, warning: false);
-        return _spinner(bg, dark, warning: true);
+        return _spinner(bg, dark, warning: _slow);
       },
       errorBuilder: (c, e, s) {
         _timer?.cancel();
+        _grace?.cancel();
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() => _failed = true);
+          if (mounted) _nextOrFail();
         });
         return Container(
           width: widget.width,
           height: widget.height,
           color: bg,
           alignment: Alignment.center,
-          child: Icon(Icons.broken_image_rounded,
-              size: 28, color: dark ? Colors.white38 : Colors.black38),
+          child: Icon(Icons.image_outlined,
+              size: 22, color: dark ? Colors.white24 : Colors.black26),
         );
       },
     );
@@ -165,13 +217,13 @@ class _NetImageState extends State<NetImage> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 const SizedBox(
-                    width: 18,
-                    height: 18,
+                    width: 16,
+                    height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2)),
-                const SizedBox(height: 6),
+                const SizedBox(height: 4),
                 Text('Сеть не отвечает…',
                     style: TextStyle(
-                        fontSize: 11, color: LuxeColors.danger)),
+                        fontSize: 10, color: LuxeColors.danger)),
               ],
             )
           : const SizedBox(

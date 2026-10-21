@@ -156,9 +156,10 @@ class SettingsTabState extends State<SettingsTab> {
                     () {
                       final av = profile?['avatar_url'] as String?;
                       if (av != null && av.isNotEmpty) {
-                        return CircleAvatar(
+                        return GradientAvatar(
+                            name: name == '...' ? '' : name,
                             radius: 32,
-                            backgroundImage: NetworkImage(av));
+                            imageUrl: av);
                       }
                       return Container(
                         width: 64,

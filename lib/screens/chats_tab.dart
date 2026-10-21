@@ -644,7 +644,7 @@ class ChatsTabState extends State<ChatsTab> {
   Widget _avatar(_Row r) {
     final url = MediaService.fixUrl(r.avatar);
     if (url != null && url.isNotEmpty) {
-      return CircleAvatar(radius: 23, backgroundImage: NetworkImage(url));
+      return GradientAvatar(name: r.title, radius: 23, imageUrl: r.avatar);
     }
     if (r.kind == 'channel') {
       return Container(

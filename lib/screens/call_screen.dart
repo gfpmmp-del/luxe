@@ -60,6 +60,13 @@ class _CallScreenState extends State<CallScreen> {
     super.initState();
     call = CallService(
       onRemoteStream: _markConnected,
+      // Собеседник нажал «Ответить». Экран должен сказать об этом
+      // сразу: раньше он до самого соединения писал «Вызов...», и
+      // звонящему казалось, что звонок не приняли.
+      onAnswered: () {
+        if (!mounted || inCall) return;
+        setState(() => status = 'Соединяем…');
+      },
       // Экран закрывает только onCallEnded. Если закрывать ещё и в
       // onSignal, при сбросе вызывается Navigator.pop дважды — экран
       // вылетает или остаётся чёрным.
@@ -114,6 +121,7 @@ class _CallScreenState extends State<CallScreen> {
       if (widget.incomingOffer != null) {
         setState(() => status = 'Принимаем звонок');
         await call.answerCall(widget.incomingOffer!);
+        if (mounted && !inCall) setState(() => status = 'Соединяем…');
       } else {
         setState(() => status = 'Вызов...');
         await call.startCall(

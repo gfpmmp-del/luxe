@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/media_service.dart';
 import '../theme/luxe_theme.dart';
+import 'net_image.dart';
 
 /// Градиент по имени — стабильный цвет аватарки как в Telegram.
 LinearGradient avatarGradient(String seed) {
@@ -33,32 +34,40 @@ class GradientAvatar extends StatelessWidget {
     final letter = name.trim().isEmpty ? '?' : name.trim()[0].toUpperCase();
     // Ссылки, записанные во времена прокси, надо чинить: сам адрес
     // сменился, а в базе остался старый.
-    final photo = MediaService.fixUrl(imageUrl);
-    final hasPhoto = photo != null && photo.isNotEmpty;
+    final urls = MediaService.candidates(imageUrl);
+    final hasPhoto = urls.isNotEmpty;
+    final letterWidget = Text(
+      letter,
+      style: TextStyle(
+        color: Colors.white,
+        fontSize: radius * 0.9,
+        fontWeight: FontWeight.bold,
+      ),
+    );
     return Stack(
       children: [
         Container(
           width: radius * 2,
           height: radius * 2,
+          clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            gradient: hasPhoto ? null : avatarGradient(name),
-            image: hasPhoto
-                ? DecorationImage(
-                    image: NetworkImage(photo), fit: BoxFit.cover)
-                : null,
+            gradient: avatarGradient(name),
           ),
           alignment: Alignment.center,
+          // Аватарка грузится с запасным адресом, а если не вышло
+          // ни по одному — остаётся буква на градиенте. Раньше при
+          // ошибке оставался пустой прозрачный круг.
           child: hasPhoto
-              ? null
-              : Text(
-                  letter,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: radius * 0.9,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+              ? NetImage(
+                  urls.first,
+                  urls: urls,
+                  width: radius * 2,
+                  height: radius * 2,
+                  fit: BoxFit.cover,
+                  fallback: letterWidget,
+                )
+              : letterWidget,
         ),
         if (showOnline)
           Positioned(

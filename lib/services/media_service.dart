@@ -226,17 +226,37 @@ class MediaService {
         'groups/$chatId-$ts.jpg', File(file.path), 'image/jpeg');
   }
 
-  /// Починить ссылку, сохранённую во времена прокси.
+  /// Все возможные адреса файла, в порядке предпочтения.
   ///
-  /// Пока приложение ходило через Cloudflare Worker, в базу писались
-  /// ссылки на него. Такие ссылки до сих пор лежат в аватарках, файлах
-  /// и голосовых — и они не работают, потому что потоковая отдача
-  /// файлов у воркера ломается. Адрес не менялся, поэтому достаточно
-  /// подставить настоящий.
+  /// Первым идёт тот, через который приложение **сейчас** ходит на
+  /// сервер. Раньше ссылка всегда переписывалась на прямой адрес
+  /// Supabase — и у всех, кто сидел на сети с заблокированным
+  /// Supabase, файлы и аватарки не грузились, хотя чаты работали:
+  /// чаты шли через воркер, а картинки принудительно — напрямую,
+  /// то есть в заблокированный адрес.
+  static List<String> candidates(String? url) {
+    if (url == null || url.isEmpty) return const [];
+    final isWorker = url.contains('workers.dev');
+    final isDirect = url.contains(SupabaseConfig.directUrl);
+    if (!isWorker && !isDirect) return [url];
+
+    final direct = isWorker
+        ? url.replaceAll(SupabaseConfig.workerUrl, SupabaseConfig.directUrl)
+        : url;
+    final viaWorker = isDirect
+        ? url.replaceAll(SupabaseConfig.directUrl, SupabaseConfig.workerUrl)
+        : url;
+
+    final preferWorker = SupabaseConfig.url == SupabaseConfig.workerUrl;
+    final list = preferWorker ? [viaWorker, direct] : [direct, viaWorker];
+    // toSet сохраняет порядок — дубликаты убираются, приоритет остаётся.
+    return list.toSet().toList();
+  }
+
+  /// Первый (самый вероятный) адрес файла.
   static String? fixUrl(String? url) {
-    if (url == null || url.isEmpty) return url;
-    if (!url.contains('workers.dev')) return url;
-    return url.replaceAll(SupabaseConfig.workerUrl, SupabaseConfig.directUrl);
+    final list = candidates(url);
+    return list.isEmpty ? url : list.first;
   }
 
   /// Починить ссылку в готовой строке сообщения или профиля.
@@ -261,33 +281,52 @@ class MediaService {
 
   /// Размер файла по публичному URL (байты). 0 — если не удалось определить.
   static Future<int> remoteSize(String url) async {
-    final target = fixUrl(url);
-    if (target == null) return 0;
-    final client = HttpClient()
-      ..connectionTimeout = Net.connectTimeout
-      ..idleTimeout = Net.idleTimeout;
-    try {
-      final req = await client.getUrl(Uri.parse(target));
-      final res = await req.close().timeout(Net.connectTimeout);
-      final len = res.contentLength;
-      res.drain<void>();
-      return len;
-    } catch (e) {
-      debugPrint('Не удалось получить размер файла: $e');
-      return 0;
-    } finally {
-      client.close();
+    final targets = candidates(url);
+    for (final target in (targets.isEmpty ? [url] : targets)) {
+      final client = HttpClient()
+        ..connectionTimeout = Net.connectTimeout
+        ..idleTimeout = Net.idleTimeout;
+      try {
+        final req = await client.getUrl(Uri.parse(target));
+        final res = await req.close().timeout(Net.connectTimeout);
+        final len = res.contentLength;
+        res.drain<void>();
+        return len;
+      } catch (e) {
+        debugPrint('Не удалось получить размер файла: $e');
+      } finally {
+        client.close();
+      }
     }
+    return 0;
   }
 
   /// Скачать файл на устройство. Возвращает путь к сохранённому файлу.
+  ///
+  /// Пробуем по очереди все адреса: сеть может резать один и пускать
+  /// другой. Раньше брался ровно один адрес, и при отказе человек
+  /// видел только «не скачалось».
   static Future<String> download(String url, String fileName) async {
+    final targets = candidates(url);
+    Object? last;
+    for (final target in (targets.isEmpty ? [url] : targets)) {
+      try {
+        return await _downloadOne(target, fileName);
+      } catch (e) {
+        last = e;
+        debugPrint('Скачать не вышло с $target: $e');
+      }
+    }
+    throw Exception(last?.toString() ?? 'Не удалось скачать файл');
+  }
+
+  static Future<String> _downloadOne(String url, String fileName) async {
     final client = HttpClient()
       ..connectionTimeout = Net.connectTimeout
       ..idleTimeout = Net.idleTimeout;
     try {
       final req = await client
-          .getUrl(Uri.parse(fixUrl(url) ?? url))
+          .getUrl(Uri.parse(url))
           .timeout(Net.connectTimeout);
       final res = await req.close().timeout(Net.connectTimeout);
       if (res.statusCode != 200) {

@@ -112,7 +112,10 @@ class _ChannelScreenState extends State<ChannelScreen> {
         title: Row(
           children: [
             avatar != null && avatar.isNotEmpty
-                ? CircleAvatar(radius: 19, backgroundImage: NetworkImage(avatar))
+                ? GradientAvatar(
+                    name: (channel?['title'] ?? '') as String,
+                    radius: 19,
+                    imageUrl: avatar)
                 : Container(
                     width: 38,
                     height: 38,

@@ -106,8 +106,7 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
             child: GestureDetector(
               onTap: isCreator ? _changeAvatar : null,
               child: avatar != null && avatar.isNotEmpty
-                  ? CircleAvatar(
-                      radius: 50, backgroundImage: NetworkImage(avatar))
+                  ? GradientAvatar(name: title, radius: 50, imageUrl: avatar)
                   : GradientAvatar(name: title, radius: 50),
             ),
           ),

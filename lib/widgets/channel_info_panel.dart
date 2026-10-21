@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/luxe_theme.dart';
+import 'luxe_widgets.dart';
 
 /// Правая панель канала: аватар, название, кнопки, описание, статистика.
 class ChannelInfoPanel extends StatelessWidget {
@@ -57,9 +58,8 @@ class ChannelInfoPanel extends StatelessWidget {
                   child: Stack(
                     children: [
                       if (avatarUrl != null && avatarUrl!.isNotEmpty)
-                        CircleAvatar(
-                            radius: 52,
-                            backgroundImage: NetworkImage(avatarUrl!))
+                        GradientAvatar(
+                            name: title, radius: 52, imageUrl: avatarUrl)
                       else
                         Container(
                           width: 104,

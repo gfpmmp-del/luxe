@@ -1,6 +1,6 @@
 {
-  "version": "1.1.3",
-  "notes": "Звонки больше не ждут сеть: ключи ретрансляции грузятся заранее, поэтому входящий появляется сразу, а не через полминуты. Входящий звонок теперь звучит и вибрирует.",
-  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.3/luxe.apk",
-  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.3/LuxeMessenger-windows.zip"
+  "version": "1.1.4",
+  "notes": "Файлы и аватарки снова грузятся: ссылки на медиа больше не отправляются принудительно в заблокированный прямой адрес. Звонящий видит «Соединяем…», как только собеседник принял звонок.",
+  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.4/luxe.apk",
+  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.4/LuxeMessenger-windows.zip"
 }
