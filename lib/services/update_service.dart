@@ -66,7 +66,7 @@ class UpdateService {
   /// на iOS Codemagic собирает без dart-define, и там считается оно.
   static const String _fromDefine = String.fromEnvironment('APP_VERSION');
 
-  static const String _fallbackVersion = '1.1.6';
+  static const String _fallbackVersion = '1.1.7';
 
   static String get currentVersion =>
       _fromDefine.isNotEmpty ? _fromDefine : _fallbackVersion;

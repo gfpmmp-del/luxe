@@ -91,9 +91,12 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     ]);
   }
 
-  /// Взять реальный файл из хранилища — свою аватарку. Выдуманный адрес
-  /// ничего не докажет, а лишний запрос к хранилищу может сам зависнуть
-  /// и подвесить весь экран.
+  /// Взять реальный файл из хранилища.
+  ///
+  /// Сначала своя аватарка, потом последняя фотография из переписки —
+  /// именно её человек и ждёт. Если ни того, ни другого нет, берём
+  /// известный файл из хранилища: проверка должна работать и у нового
+  /// аккаунта, где ещё нет ни одной фотографии.
   Future<String> _pickTestFile() async {
     try {
       final me = await supabase
@@ -103,9 +106,26 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           .maybeSingle()
           .timeout(const Duration(seconds: 6));
       final av = me?['avatar_url'] as String?;
-      if (av != null && av.isNotEmpty) return av;
+      if (av != null && av.startsWith('http')) return av;
     } catch (_) {}
-    return '';
+
+    try {
+      final row = await supabase
+          .from('messages')
+          .select('file_url')
+          .eq('type', 'image')
+          .not('file_url', 'is', null)
+          .order('created_at', ascending: false)
+          .limit(1)
+          .maybeSingle()
+          .timeout(const Duration(seconds: 6));
+      final url = row?['file_url'] as String?;
+      if (url != null && url.startsWith('http')) return url;
+    } catch (_) {}
+
+    return '${SupabaseConfig.directUrl}/storage/v1/object/public/'
+        'chat-media/avatars/'
+        '3dfbe978-ed10-4bda-be03-c18bb4b357b6-1791789794205.jpg';
   }
 
   Future<void> _restCheck(int index, String base) async {
@@ -171,7 +191,9 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
         children: [
           Text(
             'Проверка показывает, что видит именно это устройство '
-            'в этой сети. Отправьте скриншот, если что-то не работает.',
+            'в этой сети. Отправьте скриншот, если что-то не работает.\n\n'
+            'Красная строка «Файл напрямую» — это нормально, если сеть '
+            'режет Supabase: приложение в таком случае ходит через прокси.',
             style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.6)),
           ),
           const SizedBox(height: 16),

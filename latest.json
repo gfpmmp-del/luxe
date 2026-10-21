@@ -1,6 +1,6 @@
 {
-  "version": "1.1.6",
-  "notes": "Медиа больше не зависит от того, какой адрес выбран для чатов: первый файл пробует оба маршрута сразу и запоминает рабочий. Проверка связи больше не зависает и показывает каждый адрес отдельно.",
-  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.6/luxe.apk",
-  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.6/LuxeMessenger-windows.zip"
+  "version": "1.1.7",
+  "notes": "«Проверка связи» теперь работает и без аватарки: она берёт последнюю фотографию из переписки, а если фотографий нет — известный файл из хранилища. Строки больше не зависают.",
+  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.7/luxe.apk",
+  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.7/LuxeMessenger-windows.zip"
 }
