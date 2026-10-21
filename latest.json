@@ -1,6 +1,6 @@
 {
-  "version": "1.1.5",
-  "notes": "Файлы, аватарки, голосовые и кружки теперь докачиваются даже через старый прокси — раньше он обрывал файл на 22 КБ. В настройках появилась «Проверка связи»: видно, что отвечает на этом устройстве.",
-  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.5/luxe.apk",
-  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.5/LuxeMessenger-windows.zip"
+  "version": "1.1.6",
+  "notes": "Медиа больше не зависит от того, какой адрес выбран для чатов: первый файл пробует оба маршрута сразу и запоминает рабочий. Проверка связи больше не зависает и показывает каждый адрес отдельно.",
+  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.6/luxe.apk",
+  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.6/LuxeMessenger-windows.zip"
 }

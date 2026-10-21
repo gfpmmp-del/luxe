@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -92,38 +91,19 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     ]);
   }
 
-  /// Взять реальный файл из хранилища: сначала свою аватарку, потом
-  /// любую из папки avatars. Выдуманный адрес ничего не докажет.
+  /// Взять реальный файл из хранилища — свою аватарку. Выдуманный адрес
+  /// ничего не докажет, а лишний запрос к хранилищу может сам зависнуть
+  /// и подвесить весь экран.
   Future<String> _pickTestFile() async {
     try {
       final me = await supabase
           .from('profiles')
           .select('avatar_url')
           .eq('id', AuthService.myId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 6));
       final av = me?['avatar_url'] as String?;
       if (av != null && av.isNotEmpty) return av;
-    } catch (_) {}
-
-    try {
-      final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 6);
-      final req = await client.postUrl(
-          Uri.parse('${SupabaseConfig.directUrl}/storage/v1/object/list/chat-media'));
-      req.headers.set('apikey', SupabaseConfig.anonKey);
-      req.headers.set('Authorization', 'Bearer ${SupabaseConfig.anonKey}');
-      req.headers.contentType = ContentType.json;
-      req.write(jsonEncode({'prefix': 'avatars', 'limit': 1, 'offset': 0}));
-      final res = await req.close().timeout(const Duration(seconds: 8));
-      final body = await res.transform(utf8.decoder).join();
-      final list = jsonDecode(body);
-      if (list is List && list.isNotEmpty) {
-        final name = (list.first as Map)['name'];
-        if (name != null) {
-          return '${SupabaseConfig.directUrl}/storage/v1/object/public/'
-              'chat-media/avatars/$name';
-        }
-      }
     } catch (_) {}
     return '';
   }
@@ -150,18 +130,20 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
 
   Future<void> _fileCheck(int index, String url) async {
     final sw = Stopwatch()..start();
+    final host = Uri.tryParse(url)?.host ?? '';
     try {
-      // Проверяем ровно тот путь, которым приложение качает файлы:
-      // напрямую одним запросом или кусками через старый прокси.
-      final bytes = await MediaService.fetchBytes(url);
+      // Ровно этот адрес: без перебора и без подмены маршрута, иначе
+      // обе строки проверяют одно и то же.
+      final bytes = await MediaService.fetchBytes(url, exact: true)
+          .timeout(const Duration(seconds: 15));
       _set(index,
           ok: bytes.isNotEmpty,
-          detail: '${bytes.length} байт • ${sw.elapsedMilliseconds} мс'
-              '${MediaService.needsChunks(url) ? '\nкусками: прокси старый' : ''}');
+          detail: '$host\n${bytes.length} байт • ${sw.elapsedMilliseconds} мс'
+              '${MediaService.needsChunks(url) ? ' • кусками' : ''}');
     } catch (e) {
       _set(index,
           ok: false,
-          detail: 'Не вышло через ${sw.elapsedMilliseconds} мс • ${_short(e)}');
+          detail: '$host\nНе вышло за ${sw.elapsedMilliseconds} мс • ${_short(e)}');
     }
   }
 

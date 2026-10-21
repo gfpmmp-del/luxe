@@ -1,7 +1,7 @@
 name: luxe
 description: Luxe Messenger — мессенджер с чатами, файлами и звонками WebRTC.
 publish_to: 'none'
-version: 1.1.5+7
+version: 1.1.6+8
 
 environment:
   # Не поднимать выше 3.12: на Codemagic стоит Dart 3.12.2, и при более

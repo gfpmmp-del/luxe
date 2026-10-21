@@ -353,23 +353,90 @@ class MediaService {
     return future;
   }
 
+  /// Какой маршрут реально тянет файлы.
+  ///
+  /// null — ещё не знаем. REST и Storage живут на одном домене, но
+  /// ведут себя по-разному: на некоторых сетях запросы к базе проходят,
+  /// а файлы с того же адреса не едут. Поэтому первый файл качаем
+  /// сразу по обоим адресам и запоминаем, кто успел первым.
+  static bool? directMediaWorks;
+
   /// Прочитать файл целиком. Сам выбирает способ: обычный запрос или
   /// куски, если прокси старый.
-  static Future<Uint8List> fetchBytes(String url, {bool? chunked}) async {
-    final targets = candidates(url);
+  ///
+  /// [exact] — проверить ровно этот адрес, без перебора и гонки. Нужно
+  /// экрану «Проверка связи»: иначе обе строки проверяют один и тот же
+  /// маршрут и врут.
+  static Future<Uint8List> fetchBytes(
+    String url, {
+    bool? chunked,
+    bool exact = false,
+  }) async {
+    final targets = exact ? [url] : candidates(url);
+    if (targets.isEmpty) throw Exception('Нет адреса файла');
+
+    // Первый раз не знаем, какой маршрут работает, — пробуем оба сразу.
+    if (!exact && directMediaWorks == null && targets.length > 1) {
+      return _firstSuccess(targets, chunked);
+    }
+
+    final ordered = _preferredOrder(targets);
     Object? last;
-    for (final target in (targets.isEmpty ? [url] : targets)) {
+    for (final target in ordered) {
       final byChunks = chunked ?? needsChunks(target);
       try {
-        return byChunks
+        final bytes = byChunks
             ? await _rangedBytes(target)
             : await _plainBytes(target);
+        _remember(target, ok: true);
+        return bytes;
       } catch (e) {
         last = e;
+        _remember(target, ok: false);
         debugPrint('Не удалось прочитать $target: $e');
       }
     }
     throw Exception(last?.toString() ?? 'Не удалось загрузить файл');
+  }
+
+  /// Ставит первым тот маршрут, который уже доказал, что тянет файлы.
+  static List<String> _preferredOrder(List<String> targets) {
+    if (directMediaWorks == null) return targets;
+    final direct = targets.where((t) => !t.contains('workers.dev')).toList();
+    final worker = targets.where((t) => t.contains('workers.dev')).toList();
+    return directMediaWorks! ? [...direct, ...worker] : [...worker, ...direct];
+  }
+
+  static void _remember(String target, {required bool ok}) {
+    // Запоминаем только успех: он и решает, куда ходить за медиа дальше.
+    if (!ok) return;
+    directMediaWorks = !target.contains('workers.dev');
+  }
+
+  /// Гонка двух маршрутов: кто первый отдал файл целиком, тот и выиграл.
+  static Future<Uint8List> _firstSuccess(
+      List<String> targets, bool? chunked) {
+    final completer = Completer<Uint8List>();
+    var errors = 0;
+    Object? last;
+
+    for (final target in targets) {
+      final byChunks = chunked ?? needsChunks(target);
+      final job = byChunks ? _rangedBytes(target) : _plainBytes(target);
+      job.then((bytes) {
+        if (completer.isCompleted) return;
+        _remember(target, ok: true);
+        completer.complete(bytes);
+      }, onError: (Object e) {
+        last = e;
+        errors++;
+        if (errors >= targets.length && !completer.isCompleted) {
+          completer.completeError(
+              Exception(last?.toString() ?? 'Не удалось загрузить файл'));
+        }
+      });
+    }
+    return completer.future;
   }
 
   static Future<Uint8List> _plainBytes(String url) async {
@@ -553,8 +620,17 @@ class MediaService {
   /// видел только «не скачалось».
   static Future<String> download(String url, String fileName) async {
     final targets = candidates(url);
+    // Пока не доказано, что прямой адрес тянет файлы, начинаем с прокси:
+    // иначе скачивание может провисеть до пяти минут на первом же
+    // заблокированном адресе.
+    final ordered = directMediaWorks == true
+        ? targets
+        : [
+            ...targets.where((t) => t.contains('workers.dev')),
+            ...targets.where((t) => !t.contains('workers.dev')),
+          ];
     Object? last;
-    for (final target in (targets.isEmpty ? [url] : targets)) {
+    for (final target in (ordered.isEmpty ? [url] : ordered)) {
       try {
         return await _downloadOne(target, fileName);
       } catch (e) {

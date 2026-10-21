@@ -89,12 +89,10 @@ class _NetImageState extends State<NetImage> {
     _grace = Timer(const Duration(seconds: 6), () {
       if (mounted && !_failed) setState(() => _slow = true);
     });
-    // Через старый прокси файл тянут кусками — это дольше обычного,
-    // поэтому даём больше времени, чем одному запросу.
-    final seconds = MediaService.needsChunks(_urls[_index])
-        ? 60
-        : widget.timeoutSeconds;
-    _timer = Timer(Duration(seconds: seconds), _nextOrFail);
+    // Файл теперь всегда качается целиком перед показом, и через
+    // старый прокси это куски. Даём запас времени: таймер всё равно
+    // снимается, как только байты пришли.
+    _timer = Timer(const Duration(seconds: 60), _nextOrFail);
   }
 
   /// Следующий адрес, а если их больше нет — заглушка.
@@ -172,108 +170,44 @@ class _NetImageState extends State<NetImage> {
 
     final current = _urls[_index];
 
-    // Через старый прокси одним запросом файл не доезжает — качаем
-    // кусками и показываем уже готовые байты.
-    if (MediaService.needsChunks(current)) {
-      return _BytesImage(
-        key: ValueKey('$current#$_attempt'),
-        url: current,
-        width: widget.width,
-        height: widget.height,
-        fit: widget.fit,
-        bg: bg,
-        dark: dark,
-        onLoaded: () {
-          _timer?.cancel();
-          _grace?.cancel();
-          if (mounted && _slow) setState(() => _slow = false);
-        },
-        onError: () {
-          _timer?.cancel();
-          _grace?.cancel();
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) _nextOrFail();
-          });
-        },
-      );
-    }
-
-    return Image.network(
-      current,
+    // Всегда качаем байты сами, а не отдаём адрес в Image.network.
+    //
+    // Причин две. Через старый прокси файл приходит обрезанным, и
+    // Image.network не умеет добирать остаток. А на некоторых сетях
+    // REST-запросы проходят, а файлы с того же домена не едут — тогда
+    // нужен запасной маршрут и общий таймаут, которых у Image.network
+    // нет. Здесь маршрут выбирает MediaService: первый файл идёт по
+    // обоим адресам сразу, дальше — по тому, который ответил.
+    return _BytesImage(
       key: ValueKey('$current#$_attempt'),
+      url: current,
       width: widget.width,
       height: widget.height,
       fit: widget.fit,
-      gaplessPlayback: true,
-      loadingBuilder: (c, child, progress) {
-        // Пошли байты — снимаем все таймеры: загрузка живая.
-        if (progress != null && (_slow || _failed)) {
-          _timer?.cancel();
-          _grace?.cancel();
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              setState(() {
-                _slow = false;
-                _failed = false;
-              });
-            }
-          });
-        }
-        if (progress == null) return child;
-        return _spinner(bg, dark, warning: _slow);
+      bg: bg,
+      dark: dark,
+      onLoaded: () {
+        _timer?.cancel();
+        _grace?.cancel();
+        if (mounted && _slow) setState(() => _slow = false);
       },
-      errorBuilder: (c, e, s) {
+      onError: () {
         _timer?.cancel();
         _grace?.cancel();
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _nextOrFail();
         });
-        return Container(
-          width: widget.width,
-          height: widget.height,
-          color: bg,
-          alignment: Alignment.center,
-          child: Icon(Icons.image_outlined,
-              size: 22, color: dark ? Colors.white24 : Colors.black26),
-        );
       },
-    );
-  }
-
-  Widget _spinner(Color bg, bool dark, {required bool warning}) {
-    return Container(
-      width: widget.width,
-      height: widget.height,
-      color: bg,
-      alignment: Alignment.center,
-      child: warning
-          ? Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
-                const SizedBox(height: 4),
-                Text('Сеть не отвечает…',
-                    style: TextStyle(
-                        fontSize: 10, color: LuxeColors.danger)),
-              ],
-            )
-          : const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
     );
   }
 }
 
 /// Картинка, которую сначала целиком скачали в память.
 ///
-/// Нужна только для адреса через старый прокси: он отдаёт файл
-/// обрезанным, а `Image.network` не умеет добирать остаток. Здесь байты
-/// приходят кусками и склеиваются в [MediaService].
+/// `Image.network` не умеет ни добирать оборванный ответ, ни переключаться
+/// на запасной адрес по таймауту. Здесь байты приходят через
+/// [MediaService.fetchBytes] — он сам решает, каким маршрутом и кусками
+/// ли качать.
 class _BytesImage extends StatefulWidget {
   final String url;
   final double? width;
