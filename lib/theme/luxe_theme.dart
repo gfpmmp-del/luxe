@@ -6,20 +6,36 @@ import 'package:flutter/material.dart';
 /// оттенки по всему кубику и даёт кислотные акценты. Здесь всё подобрано
 /// вручную, поэтому интерфейс выглядит одинаково спокойно в обоих темах.
 class LuxeColors {
-  // Акцент — спокойный сине-индиговый. Не «кричит», но заметен.
-  static const brand = Color(0xFF4F6BED);
-  static const brandDark = Color(0xFF3D57CE);
-  static const brandSoft = Color(0xFFEEF1FE);
+  // -------- Неоновая палитра (как на мокапе) --------
+  // Глубокий тёмный фон — почти чёрный, но не синеватый.
+  static const deepDark = Color(0xFF0A0A0F);
+  static const cardDark = Color(0xFF13131B);
+  static const panelDark = Color(0xFF1A1A24);
+  static const fieldDark = Color(0xFF1E1E28);
+  static const lineDark = Color(0xFF262633);
 
-  // Историческое имя оставлено: на него ссылается весь интерфейс.
+  static const textDark = Color(0xFFEEF0F4);
+  static const textDimDark = Color(0xFF9AA1AD);
+  static const textMutedDark = Color(0xFF6B6E7B);
+
+  // Акцент — неоновый градиент: индиго → пурпур → розовый → голубой.
+  static const neonBlue = Color(0xFF6366F1);
+  static const neonPurple = Color(0xFF9333EA);
+  static const neonPink = Color(0xFFEC4899);
+  static const neonCyan = Color(0xFF06B6D4);
+  static const brand = neonBlue;
+
+  static const brandDark = Color(0xFF4F46E5);
+  static const brandSoft = Color(0xFFEEF2FF);
+
   static const tgBlue = brand;
   static const tgBlueDark = brandDark;
   static const accent = brand;
 
-  static const online = Color(0xFF2FA96B);
-  static const danger = Color(0xFFD14343);
+  static const online = Color(0xFF10B981);
+  static const danger = Color(0xFFF87171);
 
-  // Светлая тема
+  // -------- Светлая тема --------
   static const lightBg = Color(0xFFF3F4F7);
   static const lightPanel = Color(0xFFFFFFFF);
   static const lightField = Color(0xFFEAECF1);
@@ -27,13 +43,13 @@ class LuxeColors {
   static const lightText = Color(0xFF14161A);
   static const lightTextDim = Color(0xFF6B7280);
 
-  // Тёмная тема — не синеватая, а честно тёмная
-  static const darkBg = Color(0xFF0F1115);
-  static const darkCard = Color(0xFF171A21);
-  static const darkField = Color(0xFF222630);
-  static const darkLine = Color(0xFF2A2F3A);
-  static const darkText = Color(0xFFEDEFF3);
-  static const darkTextDim = Color(0xFF9AA1AD);
+  // -------- Тёмная тема --------
+  static const darkBg = deepDark;
+  static const darkCard = cardDark;
+  static const darkField = fieldDark;
+  static const darkLine = lineDark;
+  static const darkText = textDark;
+  static const darkTextDim = textDimDark;
 
   // Совместимость со старыми именами
   static const bubbleOut = Color(0xFF2E3A5C);
@@ -47,7 +63,7 @@ class LuxeColors {
   static const channelPattern = Color(0xFFEFF2F7);
   static const channelPatternDark = Color(0xFF14171D);
 
-  // Пузыри сообщений
+  // Пузыри сообщений (тёмная тема — тёмные пузыри, свои — светлые градиентные)
   static const bubbleInLight = Color(0xFFFFFFFF);
   static const bubbleOutLight = Color(0xFFE4EBFD);
   static const checkIn = Color(0xFF8A919E);
@@ -57,15 +73,36 @@ class LuxeColors {
   static const premiumGold = Color(0xFFD4A032);
   static const premiumDark = Color(0xFF33291A);
 
-  /// Приглушённые градиенты аватарок: раньше были кислотными.
+  /// Яркие градиенты аватарок — как на мокапе.
   static const avatarGradients = [
-    [Color(0xFFB08968), Color(0xFF9C7B5E)],
-    [Color(0xFF6B7A99), Color(0xFF5E6C88)],
-    [Color(0xFF5B8C99), Color(0xFF4F7D89)],
-    [Color(0xFF7D9A72), Color(0xFF6E8A64)],
-    [Color(0xFF9B7286), Color(0xFF8A6477)],
-    [Color(0xFF737A8C), Color(0xFF646B7C)],
+    [Color(0xFFEC4899), Color(0xFF8B5CF6)], // розовый → пурпур
+    [Color(0xFF06B6D4), Color(0xFF3B82F6)], // голубой → синий
+    [Color(0xFF8B5CF6), Color(0xFF6366F1)], // пурпур → индиго
+    [Color(0xFFF43F5E), Color(0xFFEC4899)], // красный → розовый
+    [Color(0xFF3B82F6), Color(0xFF06B6D4)], // синий → голубой
+    [Color(0xFFF59E0B), Color(0xFFEF4444)], // оранжевый → красный
   ];
+
+  /// Главный акцентный градиент для кнопок и пузырей.
+  static LinearGradient get brandGradient => const LinearGradient(
+        colors: [neonBlue, neonPink],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      );
+
+  /// Градиент для пузырей собственных сообщений.
+  static LinearGradient get bubbleOutGradient => const LinearGradient(
+        colors: [neonPink, neonPurple],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      );
+
+  /// Градиент для пузырей чужих сообщений (тёмная тема).
+  static LinearGradient get bubbleInGradient => const LinearGradient(
+        colors: [cardDark, panelDark],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      );
 }
 
 /// Плотности и скругления — единые для всего приложения.

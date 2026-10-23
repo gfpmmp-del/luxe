@@ -461,6 +461,7 @@ class ChatsTabState extends State<ChatsTab> {
     final selected = widget.openChatId == r.chat['id'];
     final mine = r.last != null && r.last!['sender_id'] == AuthService.myId;
     final scheme = Theme.of(context).colorScheme;
+    final dark = scheme.brightness == Brightness.dark;
 
     // Превью сообщения: у медиа вместо текста приходит ссылка,
     // её показывать нельзя — читатель видит «Начните переписку».
@@ -468,21 +469,19 @@ class ChatsTabState extends State<ChatsTab> {
         ? null
         : (mine ? 'Вы: ${r.last!['content']}' : r.last!['content']).toString();
     final text = _preview(raw, r);
+    final unreadCount = _unread(r.last!) ? 1 : 0;
 
     return InkWell(
       onTap: () => widget.onOpenChat(r.chat),
       child: Container(
         decoration: BoxDecoration(
           color: selected
-              ? LuxeColors.brand.withValues(alpha: scheme.brightness == Brightness.dark ? 0.16 : 0.09)
+              ? LuxeColors.brand.withValues(alpha: dark ? 0.12 : 0.08)
               : null,
-          border: Border(
-            bottom: BorderSide(
-              color: scheme.outlineVariant.withValues(alpha: 0.5),
-            ),
-          ),
+          borderRadius: BorderRadius.circular(14),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
           children: [
             _avatar(r),
@@ -507,56 +506,61 @@ class ChatsTabState extends State<ChatsTab> {
                       if (r.last != null)
                         Text(
                           _when(r.last!['created_at']),
-                          style:
-                              TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                          style: TextStyle(
+                              fontSize: 11, color: scheme.onSurfaceVariant),
                         ),
                     ],
                   ),
-                  const SizedBox(height: 3),
+                  const SizedBox(height: 4),
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       if (r.kind != 'direct')
-                        Padding(
-                          padding: const EdgeInsets.only(right: 5),
+                        Container(
+                          width: 18,
+                          height: 18,
+                          decoration: BoxDecoration(
+                            color: _kindChipColor(r.kind, scheme)
+                                .withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          alignment: Alignment.center,
                           child: Icon(
                             r.kind == 'channel'
                                 ? Icons.campaign_rounded
                                 : Icons.group_rounded,
-                            size: 14,
-                            color: r.kind == 'channel'
-                                ? LuxeColors.tgBlue
-                                : scheme.onSurfaceVariant,
+                            size: 10,
+                            color: _kindChipColor(r.kind, scheme),
                           ),
                         ),
+                      if (r.kind != 'direct') const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           text,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 13,
+                            fontSize: 13.5,
                             color: raw == null
                                 ? scheme.onSurfaceVariant
-                                : scheme.onSurface.withValues(alpha: 0.72),
+                                : scheme.onSurface.withValues(alpha: 0.78),
+                            fontWeight: raw == null ? FontWeight.w500 : FontWeight.w400,
                           ),
                         ),
                       ),
-                      if (r.kind != 'direct') ...[
-                        const SizedBox(width: 6),
-                        Text('${r.members}',
-                            style: TextStyle(
-                                fontSize: 11, color: scheme.onSurfaceVariant)),
-                      ],
-                      if (r.last != null && _unread(r.last!))
+                      if (unreadCount > 0) ...[
+                        const SizedBox(width: 8),
                         Container(
-                          margin: const EdgeInsets.only(left: 8),
-                          width: 7,
-                          height: 7,
+                          width: 8,
+                          height: 8,
                           decoration: const BoxDecoration(
                             shape: BoxShape.circle,
-                            color: LuxeColors.brand,
+                            gradient: LinearGradient(
+                              colors: [LuxeColors.neonPink, LuxeColors.neonPurple],
+                            ),
                           ),
                         ),
+                      ],
                     ],
                   ),
                 ],
@@ -571,6 +575,18 @@ class ChatsTabState extends State<ChatsTab> {
   /// Новое сообщение, ещё не прочитанное.
   bool _unread(Map<String, dynamic> last) =>
       last['sender_id'] != AuthService.myId && last['status'] != 'read';
+
+  /// Цвет чиппика типа чата.
+  Color _kindChipColor(String kind, ColorScheme scheme) {
+    switch (kind) {
+      case 'channel':
+        return LuxeColors.neonPurple;
+      case 'group':
+        return scheme.onSurfaceVariant;
+      default:
+        return scheme.onSurfaceVariant;
+    }
+  }
 
   /// Превью строки списка.
   ///
