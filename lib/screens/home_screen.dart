@@ -316,21 +316,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ---------- Мобильный режим ----------
+  // ---------- Мобильный режим: нижняя навигация ----------
   Widget _mobile() {
+    // В открытом чате нижнюю панель скрываем — экран целиком под чат.
+    final inChat = index == 0 && chatId != null;
     return Scaffold(
       key: scaffoldKey,
-      drawer: LuxeDrawer(
-        profile: myProfile,
-        index: index,
-        onSelect: (i) => setState(() => index = i),
-      ),
-      appBar: index == 0 && chatId != null
-          ? null
-          : AppBar(title: Text(_titleFor(index))),
+      appBar: inChat ? null : AppBar(title: Text(_titleFor(index))),
       body: Stack(
         children: [
-          if (index == 0 && chatId != null)
+          if (inChat)
             SplitChatScreen(
               chatId: chatId!,
               title: chatTitle ?? '',
@@ -349,16 +344,114 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
         ],
       ),
+      bottomNavigationBar: inChat
+          ? null
+          : _MobileNavBar(
+              index: index,
+              onSelect: (i) => setState(() => index = i),
+            ),
     );
   }
 
   String _titleFor(int i) => switch (i) {
-        1 => 'Контакты',
+        1 => 'Поиск',
         2 => 'Каналы',
         3 => 'Звонки',
-        4 => 'Настройки',
+        4 => 'Профиль',
         _ => 'Luxe',
       };
+}
+
+/// Нижняя навигация мобільной версии: тёмная панель с неоновыми
+/// иконками и бейджем непрочитанных, как в мокапе.
+class _MobileNavBar extends StatelessWidget {
+  final int index;
+  final ValueChanged<int> onSelect;
+  const _MobileNavBar({required this.index, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final inactive = dark ? Colors.white38 : Colors.black38;
+    return Container(
+      decoration: BoxDecoration(
+        color: dark ? LuxeColors.darkCard : Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(dark ? 0.3 : 0.08),
+            blurRadius: 12,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: ValueListenableBuilder<int>(
+          valueListenable: ChatsTab.unread,
+          builder: (_, count, __) => Row(
+            children: [
+              _item(Icons.chat_bubble_rounded, 'Чаты', 0,
+                  inactive: inactive, badge: count == 0 ? null : '$count'),
+              _item(Icons.search_rounded, 'Поиск', 1, inactive: inactive),
+              _item(Icons.campaign_rounded, 'Каналы', 2, inactive: inactive),
+              _item(Icons.call_rounded, 'Звонки', 3, inactive: inactive),
+              _item(Icons.person_rounded, 'Профиль', 4, inactive: inactive),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _item(IconData icon, String label, int i,
+      {required Color inactive, String? badge}) {
+    final selected = index == i;
+    final color = selected ? LuxeColors.neonBlue : inactive;
+    return Expanded(
+      child: InkWell(
+        onTap: () => onSelect(i),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(icon, color: color, size: 24),
+                  if (badge != null)
+                    Positioned(
+                      top: -4,
+                      right: -8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          gradient: LuxeColors.bubbleOutGradient,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(badge,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 3),
+              Text(label,
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: color,
+                      fontWeight:
+                          selected ? FontWeight.w600 : FontWeight.w400)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Панель канала с логикой подписки и смены аватара.
