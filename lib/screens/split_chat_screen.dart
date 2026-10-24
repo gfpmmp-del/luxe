@@ -511,7 +511,7 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
                       ? Icons.campaign_outlined
                       : Icons.info_outline_rounded,
                       size: 15,
-                      color: LuxeColors.tgBlue),
+                      color: LuxeColors.neonBlue),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -594,11 +594,11 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
             color: active
-                ? LuxeColors.tgBlue
+                ? LuxeColors.neonBlue
                 : (isDark ? Colors.white10 : Colors.black12),
             border: Border.all(
               color: active
-                  ? LuxeColors.tgBlue
+                  ? LuxeColors.neonBlue
                   : (isDark ? Colors.white24 : Colors.black26),
             ),
           ),
@@ -711,13 +711,15 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     final hasMedia =
         url != null && url.isNotEmpty && type != 'text' && type != 'voice';
 
-    // Светлая тема — пузыри как в Telegram: исходящий зелёный, входящий белый
+    // Исходящие — фирменный неоновый градиент в обеих темах,
+    // входящие — тёмные в тёмной теме и белые в светлой.
+    final gradientBubble = mine && !failed;
     final bg = failed
         ? (dark ? const Color(0xFF5C2B2B) : const Color(0xFFFBE3E4))
         : mine
-            ? (dark ? LuxeColors.bubbleOut : LuxeColors.bubbleOutLight)
+            ? null
             : (dark ? LuxeColors.bubbleIn : LuxeColors.bubbleInLight);
-    final fg = dark || mine ? Colors.white : Colors.black87;
+    final fg = gradientBubble || dark ? Colors.white : Colors.black87;
     // Ширина считается от реальной ширины колонки, а не от ширины окна:
     // в трёхколоночном режиме колонка чата намного уже окна
     final maxW = (available * 0.82).clamp(160.0, available - 24);
@@ -733,17 +735,18 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
       constraints: BoxConstraints(maxWidth: maxW),
       decoration: BoxDecoration(
         color: bg,
+        gradient: gradientBubble ? LuxeColors.bubbleOutGradient : null,
         borderRadius: BorderRadius.only(
-          topLeft: const Radius.circular(16),
-          topRight: const Radius.circular(16),
-          bottomLeft: Radius.circular(mine ? 16 : 5),
-          bottomRight: Radius.circular(mine ? 5 : 16),
+          topLeft: const Radius.circular(18),
+          topRight: const Radius.circular(18),
+          bottomLeft: Radius.circular(mine ? 18 : 5),
+          bottomRight: Radius.circular(mine ? 5 : 18),
         ),
         boxShadow: [
           if (!failed)
             BoxShadow(
-              color: Colors.black.withValues(alpha: dark ? 0.25 : 0.08),
-              blurRadius: 3,
+              color: Colors.black.withValues(alpha: dark ? 0.25 : 0.1),
+              blurRadius: 4,
               offset: const Offset(0, 1),
             ),
         ],
@@ -794,7 +797,7 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
                     fontSize: 10,
                     color: mine || dark ? Colors.white54 : Colors.black45),
               ),
-              if (mine) Ticks(status: status, lightBubble: !dark && mine),
+              if (mine) Ticks(status: status),
             ],
           ),
         ],
@@ -1122,10 +1125,15 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     final today = DateTime(now.year, now.month, now.day);
     final day = DateTime(dt.year, dt.month, dt.day);
     final diff = today.difference(day).inDays;
+    const months = [
+      'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+      'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+    ];
     final label = switch (diff) {
       0 => 'Сегодня',
       1 => 'Вчера',
-      _ => '${day.day}.${day.month}.${day.year}',
+      _ =>
+          '${day.day} ${months[day.month - 1]}${day.year != now.year ? ' ${day.year}' : ''}',
     };
     return Center(
       child: Container(
@@ -1172,8 +1180,8 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
                 height: 28,
                 decoration: const BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                      colors: [LuxeColors.brand, Color(0xFF8A93D8)]),
+                  gradient: const LinearGradient(
+                      colors: [LuxeColors.neonBlue, LuxeColors.neonPurple]),
                 ),
                 child: const Icon(Icons.campaign_rounded,
                     color: Colors.white, size: 15),
@@ -1183,7 +1191,7 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
                 child: Text(widget.title,
                     style: const TextStyle(
                         fontWeight: FontWeight.bold,
-                        color: LuxeColors.tgBlue,
+                        color: LuxeColors.neonBlue,
                         fontSize: 14)),
               ),
               Text(
