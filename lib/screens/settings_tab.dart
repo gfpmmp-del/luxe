@@ -136,15 +136,11 @@ class SettingsTabState extends State<SettingsTab> {
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(24),
-            gradient: const LinearGradient(
-              colors: [LuxeColors.tgBlue, Color(0xFF7A5AF8)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
+            gradient: LuxeColors.brandGradient,
             boxShadow: [
               BoxShadow(
-                  color: LuxeColors.tgBlue.withOpacity(0.35),
-                  blurRadius: 20,
+                  color: LuxeColors.neonPink.withValues(alpha: 0.25),
+                  blurRadius: 24,
                   offset: const Offset(0, 8)),
             ],
           ),
@@ -188,7 +184,7 @@ class SettingsTabState extends State<SettingsTab> {
                           color: Colors.white,
                         ),
                         child: const Icon(Icons.camera_alt_rounded,
-                            size: 14, color: LuxeColors.tgBlue),
+                            size: 14, color: LuxeColors.neonBlue),
                       ),
                     ),
                   ],
@@ -247,7 +243,8 @@ class SettingsTabState extends State<SettingsTab> {
                           ? 'Занят'
                           : 'Невидимка'),
                   trailing: profile?['status'] == s
-                      ? const Icon(Icons.check, color: LuxeColors.tgBlue)
+                      ? const Icon(Icons.check_rounded,
+                          color: LuxeColors.neonBlue)
                       : null,
                   onTap: () => _setStatus(s),
                 ),
@@ -300,10 +297,11 @@ class SettingsTabState extends State<SettingsTab> {
                   (ThemeMode.dark, 'Тёмная', Icons.dark_mode),
                 ])
                   ListTile(
-                    leading: Icon(e.$3, color: LuxeColors.tgBlue),
+                    leading: Icon(e.$3, color: LuxeColors.neonBlue),
                     title: Text(e.$2),
                     trailing: mode == e.$1
-                        ? const Icon(Icons.check, color: LuxeColors.tgBlue)
+                        ? const Icon(Icons.check_rounded,
+                            color: LuxeColors.neonBlue)
                         : null,
                     onTap: () => LuxeTheme.mode.value = e.$1,
                   ),
@@ -321,28 +319,29 @@ class SettingsTabState extends State<SettingsTab> {
             children: [
               SwitchListTile(
                 secondary:
-                    const Icon(Icons.notifications, color: LuxeColors.tgBlue),
+                    const Icon(Icons.notifications, color: LuxeColors.neonBlue),
                 title: const Text('Уведомления'),
                 value: notifications,
                 onChanged: (v) => setState(() => notifications = v),
               ),
               ListTile(
-                leading: const Icon(Icons.code_rounded, color: LuxeColors.tgBlue),
+                leading:
+                    const Icon(Icons.code_rounded, color: LuxeColors.neonBlue),
                 title: const Text('Creator'),
                 subtitle: const Text('Связаться с разработчиком'),
                 onTap: _openCreatorLink,
               ),
               ListTile(
                 leading: const Icon(Icons.system_update_alt_rounded,
-                    color: LuxeColors.tgBlue),
+                    color: LuxeColors.neonBlue),
                 title: const Text('Обновления'),
                 subtitle: const Text('Проверить новую версию'),
                 onTap: () => Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const UpdateScreen())),
               ),
               ListTile(
-                leading:
-                    const Icon(Icons.wifi_tethering_rounded, color: LuxeColors.tgBlue),
+                leading: const Icon(Icons.wifi_tethering_rounded,
+                    color: LuxeColors.neonBlue),
                 title: const Text('Проверка связи'),
                 subtitle: const Text('Сервер и файлы: что отвечает на этом устройстве'),
                 onTap: () => Navigator.of(context).push(
@@ -350,7 +349,7 @@ class SettingsTabState extends State<SettingsTab> {
               ),
               ListTile(
                 leading: const Icon(Icons.emoji_emotions_outlined,
-                    color: LuxeColors.tgBlue),
+                    color: LuxeColors.neonBlue),
                 title: const Text('Стикеры'),
                 subtitle: const Text('Мои наборы, добавление и удаление'),
                 onTap: () => Navigator.of(context).push(
@@ -358,7 +357,7 @@ class SettingsTabState extends State<SettingsTab> {
               ),
               ListTile(
                 leading:
-                    const Icon(Icons.info_outline, color: LuxeColors.tgBlue),
+                    const Icon(Icons.info_outline, color: LuxeColors.neonBlue),
                 title: const Text('О Luxe'),
                 subtitle: Text(
                     // Версию берём ту же, что и проверка обновлений.
