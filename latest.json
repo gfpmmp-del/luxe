@@ -1,6 +1,6 @@
 {
-  "version": "1.1.7",
-  "notes": "«Проверка связи» теперь работает и без аватарки: она берёт последнюю фотографию из переписки, а если фотографий нет — известный файл из хранилища. Строки больше не зависают.",
-  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.7/luxe.apk",
-  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.7/LuxeMessenger-windows.zip"
+  "version": "1.1.8",
+  "notes": "Новый дизайн: неоновая тёмная тема, градиентные пузыри сообщений, разделители дат, нижняя навигация на телефоне вместо бокового меню. Чаты, профиль и панель ввода переделаны под новый стиль.",
+  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.8/luxe.apk",
+  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.8/LuxeMessenger-windows.zip"
 }
