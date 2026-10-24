@@ -378,7 +378,7 @@ class _MobileNavBar extends StatelessWidget {
         color: dark ? LuxeColors.darkCard : Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(dark ? 0.3 : 0.08),
+            color: Colors.black.withValues(alpha: dark ? 0.3 : 0.08),
             blurRadius: 12,
             offset: const Offset(0, -2),
           ),

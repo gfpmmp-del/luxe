@@ -238,7 +238,7 @@ class ChatComposerState extends State<ChatComposer>
                       value: _level.clamp(0.02, 1.0),
                       minHeight: 4,
                       backgroundColor: fg.withValues(alpha: 0.15),
-                      valueColor: const AlwaysStoppedAnimation(LuxeColors.tgBlue),
+                      valueColor: const AlwaysStoppedAnimation(LuxeColors.neonBlue),
                     ),
                   ),
                 ],
@@ -252,7 +252,7 @@ class ChatComposerState extends State<ChatComposer>
               padding: const EdgeInsets.all(8),
               decoration: const BoxDecoration(
                 shape: BoxShape.circle,
-                color: LuxeColors.tgBlue,
+                color: LuxeColors.neonBlue,
               ),
               child: const Icon(Icons.send_rounded, color: Colors.white, size: 18),
             ),
@@ -332,7 +332,7 @@ class ChatComposerState extends State<ChatComposer>
                 child: ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.image_rounded, color: LuxeColors.tgBlue),
+                  leading: Icon(Icons.image_rounded, color: LuxeColors.neonBlue),
                   title: Text('Фото'),
                 ),
               ),
@@ -341,7 +341,7 @@ class ChatComposerState extends State<ChatComposer>
                 child: ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.movie_rounded, color: LuxeColors.tgBlue),
+                  leading: Icon(Icons.movie_rounded, color: LuxeColors.neonBlue),
                   title: Text('Видео'),
                 ),
               ),
@@ -352,7 +352,7 @@ class ChatComposerState extends State<ChatComposer>
                     dense: true,
                     contentPadding: EdgeInsets.zero,
                     leading:
-                        Icon(Icons.circle_outlined, color: LuxeColors.tgBlue),
+                        Icon(Icons.circle_outlined, color: LuxeColors.neonBlue),
                     title: Text('Кружок'),
                   ),
                 ),
@@ -362,7 +362,7 @@ class ChatComposerState extends State<ChatComposer>
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(Icons.insert_drive_file_rounded,
-                      color: LuxeColors.tgBlue),
+                      color: LuxeColors.neonBlue),
                   title: Text('Файл'),
                 ),
               ),

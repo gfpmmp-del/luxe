@@ -148,7 +148,7 @@ class _VoiceMessageState extends State<VoiceMessage> {
           shape: BoxShape.circle,
           color: widget.mine || widget.dark
               ? Colors.white.withValues(alpha: 0.18)
-              : LuxeColors.tgBlue.withValues(alpha: 0.12),
+              : LuxeColors.neonBlue.withValues(alpha: 0.14),
         ),
         child: widget.url.isEmpty
             ? Icon(Icons.hourglass_empty_rounded, size: 20, color: dim)

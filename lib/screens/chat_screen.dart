@@ -372,7 +372,7 @@ class _ChatScreenState extends State<ChatScreen> {
         color: dark ? LuxeColors.darkCard : Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(dark ? 0.25 : 0.08),
+            color: Colors.black.withValues(alpha: dark ? 0.25 : 0.08),
             blurRadius: 10,
             offset: const Offset(0, -2),
           ),
@@ -440,8 +440,8 @@ class _DateSeparator extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           decoration: BoxDecoration(
             color: dark
-                ? Colors.white.withOpacity(0.07)
-                : Colors.black.withOpacity(0.06),
+                ? Colors.white.withValues(alpha: 0.07)
+                : Colors.black.withValues(alpha: 0.06),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Text(
@@ -505,7 +505,7 @@ class _MessageBubble extends StatelessWidget {
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(dark ? 0.3 : 0.12),
+              color: Colors.black.withValues(alpha: dark ? 0.3 : 0.12),
               blurRadius: 4,
               offset: const Offset(0, 2),
             ),
