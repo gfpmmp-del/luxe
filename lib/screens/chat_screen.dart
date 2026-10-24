@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:timeago/timeago.dart' as timeago;
 import 'package:url_launcher/url_launcher.dart';
 import '../main.dart';
 import '../services/auth_service.dart';
@@ -226,9 +225,13 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final myId = AuthService.myId;
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final scheme = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
+        elevation: 0,
+        backgroundColor: dark ? LuxeColors.darkCard : Colors.white,
         title: GestureDetector(
           onTap: kind == 'group'
               ? () => Navigator.push(
@@ -242,15 +245,21 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Row(
             children: [
               GradientAvatar(name: widget.title, radius: 19),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(widget.title,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 17)),
-                    if (otherStatus.isNotEmpty)
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w600)),
+                    if (kind == 'group')
+                      Text('$memberCount ${_plural(memberCount)}',
+                          style: TextStyle(
+                              fontSize: 12, color: scheme.onSurfaceVariant))
+                    else if (otherStatus.isNotEmpty)
                       Text(
                         otherStatus == 'online'
                             ? 'в сети'
@@ -258,16 +267,11 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ? 'занят(а)'
                                 : 'был(а) недавно',
                         style: TextStyle(
-                          fontSize: 12,
-                          color: otherStatus == 'online'
-                              ? LuxeColors.online
-                              : Colors.white70,
-                        ),
+                            fontSize: 12,
+                            color: otherStatus == 'online'
+                                ? LuxeColors.online
+                                : scheme.onSurfaceVariant),
                       ),
-                    if (kind == 'group')
-                      Text('$memberCount ${_plural(memberCount)} • нажмите для инфо',
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.white70)),
                   ],
                 ),
               ),
@@ -283,228 +287,346 @@ class _ChatScreenState extends State<ChatScreen> {
               tooltip: 'Видеозвонок',
               icon: const Icon(Icons.videocam_rounded),
               onPressed: () => openCall(true)),
+          const SizedBox(width: 4),
         ],
       ),
       body: Column(
         children: [
           Expanded(
             child: Container(
-              color: dark ? LuxeColors.darkBg : const Color(0xFFE7EBF0),
+              color: dark ? LuxeColors.deepDark : const Color(0xFFE7EBF0),
               child: msgs.isEmpty
                   ? Center(
                       child: Text('Сообщений пока нет',
-                          style: TextStyle(
-                              color: dark
-                                  ? Colors.white54
-                                  : Colors.black54)))
+                          style: TextStyle(color: scheme.onSurfaceVariant)))
                   : ListView.builder(
                       controller: scroll,
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 8),
+                          horizontal: 12, vertical: 12),
                       itemCount: msgs.length,
                       itemBuilder: (context, i) {
                         final m = msgs[i];
-                        final mine = m['sender_id'] == myId;
-                        // Ссылки, записанные во времена прокси, не
-                        // работают: адрес сменился, а в базе остался
-                        // старый. Чиним на лету.
-                        final fileUrl =
-                            MediaService.fixUrl(m['file_url'] as String?);
-                        // Стикер показываем без пузыря, как в Telegram
-                        if (m['type'] == 'sticker' &&
-                            fileUrl != null &&
-                            fileUrl.isNotEmpty) {
-                          return Align(
-                            alignment: mine
-                                ? Alignment.centerRight
-                                : Alignment.centerLeft,
-                            child: Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 4),
-                              child: Column(
-                                crossAxisAlignment: mine
-                                    ? CrossAxisAlignment.end
-                                    : CrossAxisAlignment.start,
-                                children: [
-                                  StickerView(
-                                    url: fileUrl,
-                                    kind: MediaService.stickerKind(fileUrl),
-                                    size: 124,
-                                  ),
-                                  Text(
-                                    timeago.format(
-                                        DateTime.parse(m['created_at'])
-                                            .toLocal(),
-                                        locale: 'ru'),
-                                    style: TextStyle(
-                                        color: dark
-                                            ? Colors.white54
-                                            : Colors.black45,
-                                        fontSize: 10),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
+                        final isMine = m['sender_id'] == myId;
+                        final date = DateTime.parse(m['created_at']).toLocal();
+
+                        var showDate = true;
+                        if (i > 0) {
+                          final prev =
+                              DateTime.parse(msgs[i - 1]['created_at']).toLocal();
+                          if (date.year == prev.year &&
+                              date.month == prev.month &&
+                              date.day == prev.day) {
+                            showDate = false;
+                          }
                         }
-                        return GestureDetector(
-                          onLongPress: mine ? () async {
-                            final confirm = await showDialog<bool>(
-                              context: context,
-                              builder: (_) => AlertDialog(
-                                title: const Text('Удалить сообщение?'),
-                                actions: [
-                                  TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Отмена')),
-                                  TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Удалить', style: TextStyle(color: Colors.red))),
-                                ],
-                              ),
-                            );
-                            if (confirm == true && m['id'] != null) {
-                              await ChatService.deleteMessage(m['id'] as String);
-                              setState(() => msgs.removeWhere((msg) => msg['id'] == m['id']));
-                            }
-                          } : null,
-                          child: Align(
-                            alignment: mine
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 2),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 8),
-                            constraints: BoxConstraints(
-                                maxWidth:
-                                    MediaQuery.of(context).size.width * 0.75),
-                            decoration: BoxDecoration(
-                              color: mine
-                                  ? LuxeColors.bubbleOut
-                                  : (dark
-                                      ? LuxeColors.bubbleIn
-                                      : Colors.white),
-                              borderRadius: BorderRadius.only(
-                                topLeft: const Radius.circular(16),
-                                topRight: const Radius.circular(16),
-                                bottomLeft: Radius.circular(mine ? 16 : 4),
-                                bottomRight: Radius.circular(mine ? 4 : 16),
-                              ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.15),
-                                  blurRadius: 3,
-                                  offset: const Offset(0, 1),
-                                ),
-                              ],
+
+                        return Column(
+                          children: [
+                            if (showDate) _DateSeparator(date: date, dark: dark),
+                            _MessageBubble(
+                              message: m,
+                              isMine: isMine,
+                              dark: dark,
+                              onLongPress: isMine ? () => _confirmDelete(m) : null,
+                              onVoicePlayed: () => _markVoicePlayed(m),
                             ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (m['type'] == 'voice' &&
-                                    fileUrl != null && fileUrl.isNotEmpty)
-                                  VoiceMessage(
-                                    url: fileUrl,
-                                    waveform: m['waveform'] as String?,
-                                    durationSeconds:
-                                        (m['duration'] as num?)?.toInt() ?? 0,
-                                    mine: mine,
-                                    dark: dark,
-                                    played: m['heard'] == true ||
-                                        m['status'] == 'read',
-                                    onPlayed: () => _markVoicePlayed(m),
-                                  )
-                                else if (m['type'] == 'circle' &&
-                                    fileUrl != null && fileUrl.isNotEmpty)
-                                  VideoCircle(
-                                    url: fileUrl,
-                                    durationSeconds:
-                                        (m['duration'] as num?)?.toInt() ?? 0,
-                                    mine: mine,
-                                  )
-                                else if (m['type'] == 'file' && fileUrl != null)
-                                  Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          const Icon(Icons.insert_drive_file, size: 18, color: Colors.white70),
-                                          const SizedBox(width: 6),
-                                          Expanded(
-                                            child: Text(
-                                              m['content'] ?? 'Файл',
-                                              style: TextStyle(
-                                                color: mine || dark ? Colors.white : Colors.black87,
-                                                fontSize: 15,
-                                                decoration: TextDecoration.underline,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 4),
-                                      InkWell(
-                                        onTap: () async {
-                                          final url = fileUrl;
-                                          if (await canLaunchUrl(Uri.parse(url))) {
-                                            await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-                                          } else {
-                                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Не удалось открыть: $url')));
-                                          }
-                                        },
-                                        child: Text('Открыть файл →',
-                                            style: TextStyle(
-                                                color: mine || dark ? Colors.white70 : Colors.black54,
-                                                fontSize: 12,
-                                                decoration: TextDecoration.underline)),
-                                      ),
-                                    ],
-                                  )
-                                else
-                                  Text(m['content'] ?? '',
-                                      style: TextStyle(
-                                          color: mine || dark
-                                              ? Colors.white
-                                              : Colors.black87,
-                                          fontSize: 15)),
-                                 const SizedBox(height: 2),
-                                 Text(
-                                   timeago.format(DateTime.parse(m['created_at']).toLocal(), locale: 'ru'),
-                                   style: TextStyle(
-                                       color: mine || dark ? Colors.white54 : Colors.black45,
-                                       fontSize: 10),
-                                 ),
-                               ],
-                             ),
-                         ),
-                       ),
-                     );
+                          ],
+                        );
                       },
                     ),
             ),
           ),
-          SafeArea(
-            child: ChatComposer(
-              controller: input,
-              dark: dark,
-              isChannel: false,
-              onSend: send,
-              onVoiceReady: _sendVoice,
-              onCircleReady: _sendCircle,
-              onSticker: _sendSticker,
-              onAddSticker: () async {
-                final ok = await showAddStickerDialog(context);
-                if (ok && mounted) setState(() {});
-              },
-              onOpenAllStickers: () {
-                Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => const StickersScreen()));
-              },
-              onAttachPhoto: _attachPhoto,
-              onAttachVideo: _attachVideo,
-              onAttachFile: _attachFile,
-            ),
+          _buildComposer(dark),
+        ],
+      ),
+    );
+  }
+
+  // Подтверждение удаления своего сообщения (долгое нажатие).
+  Future<void> _confirmDelete(Map<String, dynamic> m) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Удалить сообщение?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Отмена')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child:
+                  const Text('Удалить', style: TextStyle(color: Colors.red))),
+        ],
+      ),
+    );
+    if (confirm == true && m['id'] != null) {
+      await ChatService.deleteMessage(m['id'] as String);
+      setState(() => msgs.removeWhere((msg) => msg['id'] == m['id']));
+    }
+  }
+
+  // Нижняя панель ввода: контейнер с тенью, «парящий» над фоном.
+  Widget _buildComposer(bool dark) {
+    return Container(
+      decoration: BoxDecoration(
+        color: dark ? LuxeColors.darkCard : Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(dark ? 0.25 : 0.08),
+            blurRadius: 10,
+            offset: const Offset(0, -2),
           ),
         ],
       ),
+      child: SafeArea(
+        child: ChatComposer(
+          controller: input,
+          dark: dark,
+          isChannel: false,
+          onSend: send,
+          onVoiceReady: _sendVoice,
+          onCircleReady: _sendCircle,
+          onSticker: _sendSticker,
+          onAddSticker: () async {
+            final ok = await showAddStickerDialog(context);
+            if (ok && mounted) setState(() {});
+          },
+          onOpenAllStickers: () {
+            Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const StickersScreen()));
+          },
+          onAttachPhoto: _attachPhoto,
+          onAttachVideo: _attachVideo,
+          onAttachFile: _attachFile,
+        ),
+      ),
+    );
+  }
+}
+
+// ------------------- Вспомогательные виджеты -------------------
+
+// Плашка с датой между группами сообщений: «Сегодня», «Вчера», «24 октября».
+class _DateSeparator extends StatelessWidget {
+  final DateTime date;
+  final bool dark;
+  const _DateSeparator({required this.date, required this.dark});
+
+  static const _months = [
+    'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+    'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+  ];
+
+  static bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    String label;
+    if (_sameDay(date, now)) {
+      label = 'Сегодня';
+    } else if (_sameDay(date, now.subtract(const Duration(days: 1)))) {
+      label = 'Вчера';
+    } else {
+      label = '${date.day} ${_months[date.month - 1]}';
+      if (date.year != now.year) label += ' ${date.year}';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: dark
+                ? Colors.white.withOpacity(0.07)
+                : Colors.black.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: dark ? Colors.white60 : Colors.black54,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Пузырь сообщения: свои — с неоновым градиентом, чужие — тёмные/белые.
+class _MessageBubble extends StatelessWidget {
+  final Map<String, dynamic> message;
+  final bool isMine;
+  final bool dark;
+  final VoidCallback? onLongPress;
+  final VoidCallback? onVoicePlayed;
+
+  const _MessageBubble({
+    required this.message,
+    required this.isMine,
+    required this.dark,
+    this.onLongPress,
+    this.onVoicePlayed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final type = message['type'] as String?;
+    final content = message['content'] as String?;
+    final createdAt = DateTime.parse(message['created_at']).toLocal();
+    final time =
+        '${createdAt.hour.toString().padLeft(2, '0')}:${createdAt.minute.toString().padLeft(2, '0')}';
+    // Ссылки, записанные во времена прокси, чиним на лету: адрес
+    // сменился, а в базе остался старый.
+    final fileUrl = MediaService.fixUrl(message['file_url'] as String?);
+    final hasFile = fileUrl != null && fileUrl.isNotEmpty;
+
+    Widget bubble;
+    if (type == 'sticker' && hasFile) {
+      // Стикер показываем без пузыря, как в Telegram.
+      bubble = StickerView(
+          url: fileUrl, kind: MediaService.stickerKind(fileUrl), size: 124);
+    } else {
+      bubble = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          gradient: isMine ? LuxeColors.bubbleOutGradient : null,
+          color: isMine ? null : (dark ? LuxeColors.bubbleIn : Colors.white),
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(18),
+            topRight: const Radius.circular(18),
+            bottomLeft: Radius.circular(isMine ? 18 : 4),
+            bottomRight: Radius.circular(isMine ? 4 : 18),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(dark ? 0.3 : 0.12),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: _content(context, type, content, fileUrl),
+      );
+    }
+
+    return Align(
+      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+      child: GestureDetector(
+        onLongPress: onLongPress,
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+          constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.75),
+          child: Column(
+            crossAxisAlignment:
+                isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            children: [
+              bubble,
+              const SizedBox(height: 2),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(time,
+                      style: TextStyle(
+                          fontSize: 10,
+                          color: dark ? Colors.white38 : Colors.black38)),
+                  if (isMine) ...[
+                    const SizedBox(width: 3),
+                    Icon(
+                      message['status'] == 'read'
+                          ? Icons.done_all_rounded
+                          : Icons.done_rounded,
+                      size: 13,
+                      color: message['status'] == 'read'
+                          ? LuxeColors.neonBlue
+                          : (dark ? Colors.white38 : Colors.black38),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _content(
+      BuildContext context, String? type, String? content, String? fileUrl) {
+    if (type == 'voice' && fileUrl != null && fileUrl.isNotEmpty) {
+      return VoiceMessage(
+        url: fileUrl,
+        waveform: message['waveform'] as String?,
+        durationSeconds: (message['duration'] as num?)?.toInt() ?? 0,
+        mine: isMine,
+        dark: dark,
+        played: message['heard'] == true || message['status'] == 'read',
+        onPlayed: onVoicePlayed,
+      );
+    }
+
+    if (type == 'circle' && fileUrl != null && fileUrl.isNotEmpty) {
+      return VideoCircle(
+        url: fileUrl,
+        durationSeconds: (message['duration'] as num?)?.toInt() ?? 0,
+        mine: isMine,
+      );
+    }
+
+    if (type == 'file' && fileUrl != null && fileUrl.isNotEmpty) {
+      return InkWell(
+        onTap: () async {
+          final uri = Uri.parse(fileUrl);
+          if (await canLaunchUrl(uri)) {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          } else if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Не удалось открыть: $fileUrl')));
+          }
+        },
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.insert_drive_file_rounded,
+                    size: 18,
+                    color: isMine ? Colors.white70 : LuxeColors.neonBlue),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    content ?? 'Файл',
+                    style: TextStyle(
+                        color: isMine || dark ? Colors.white : Colors.black87,
+                        fontSize: 15),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text('Открыть файл →',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: isMine
+                        ? Colors.white70
+                        : (dark ? Colors.white60 : Colors.black54))),
+          ],
+        ),
+      );
+    }
+
+    return Text(
+      content ?? '',
+      style: TextStyle(
+          color: isMine || dark ? Colors.white : Colors.black87, fontSize: 15),
     );
   }
 }
