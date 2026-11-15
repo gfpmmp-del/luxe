@@ -42,6 +42,7 @@ final class LuxeCallAudio: NSObject {
   private var inCall = false
 
   private override init() {
+    super.init()
     NotificationCenter.default.addObserver(
       self,
       selector: #selector(handleInterruption(_:)),
