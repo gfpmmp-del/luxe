@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
@@ -86,6 +87,11 @@ class _CallScreenState extends State<CallScreen> {
       },
       onCallEnded: _closeOnce,
     );
+    // На iOS видео-звонок сразу звучит с динамика — так слышно, не
+    // поднося телефон к уху. Кнопка «Динамик» показывает это же.
+    speaker = !kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.iOS &&
+        isVideo;
     _start();
   }
 

@@ -31,8 +31,13 @@ class RingService {
 
     try {
       await _player.setAsset('assets/sound/ring.wav');
+      // Пока файл загружался, могли ответить или отклонить звонок.
+      // Без этой проверки play() запускался уже после stop(), и
+      // рингтон продолжал играть поверх разговора.
+      if (!_on) return;
       await _player.setLoopMode(LoopMode.one);
       await _player.setVolume(1.0);
+      if (!_on) return;
       await _player.play();
     } catch (e) {
       // Звук не критичен: вибрация уже идёт.

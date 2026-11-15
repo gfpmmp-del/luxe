@@ -80,14 +80,32 @@ flutter build windows --release
 
 ## Звонки: звук
 
-Звук настраивается **только** средствами flutter_webrtc
-(`Helper.setAndroidAudioConfiguration`, `Helper.setAppleAudioConfiguration`,
-`Helper.setSpeakerphoneOn`). Пакет `audio_session` удалён намеренно:
-он конфликтует с аудио-модулем WebRTC и ломает маршрутизацию.
+Звук настраивается средствами flutter_webrtc
+(`Helper.setAndroidAudioConfiguration`, `Helper.setAppleAudioConfiguration`)
+и нативной сессией iOS (`ios/Runner/AppDelegate.swift`, канал
+`luxe/call_audio`, обёртка `lib/services/call_audio.dart`).
 
-Настройка идёт **до** `getUserMedia`, `ensureAudioSession()` — **после** него.
-До появления аудиотрека плагин считает, что записывать нечего, и Voice
-Processing (VPIO на iOS) не включается.
+Главное про iOS: flutter_webrtc выставляет категорию `.playAndRecord` и
+режим `.voiceChat`, но **не активирует** AVAudioSession — активацию он
+оставляет своему аудио-модулю, и она иногда теряется. Звонок соединяется,
+а звука нет ни в одну сторону. Поэтому сессия поднимается явно: `start`
+(категория + режим + `setActive(true)`) до `getUserMedia`, `activate` —
+после него, `end` — по завершении звонка.
+
+Категорию во время звонка не меняем: переключение `.playback` ⇄
+`.playAndRecord` убивает удалённый звук (flutter-webrtc #2036). Маршрут
+«динамик ⇄ наушник» меняется только через `overrideOutputAudioPort`,
+поэтому `defaultToSpeaker` в конфигурации не ставится — с ним
+разговорный динамик телефона недоступен.
+
+Настройка идёт **до** `getUserMedia`, `ensureAudioSession()` — **после**
+него. До появления аудиотрека плагин считает, что записывать нечего, и
+Voice Processing (VPIO на iOS) не включается.
+
+Перед стартом звонка останавливаются рингтон (`RingService`) и голосовые
+(`VoicePlayer`), причём с ожиданием: плееры just_audio держат
+аудиосессию, и звонок иначе наследует категорию воспроизведения. Пакет
+`audio_session` не используется — конфликтует с WebRTC.
 
 ## Сеть: обход блокировок
 

@@ -5,7 +5,9 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../main.dart';
 import 'auth_service.dart';
+import 'call_audio.dart';
 import 'net.dart';
+import 'voice_service.dart';
 
 /// WebRTC звонки 1-на-1. Сигналинг — таблица call_signals через Supabase Realtime.
 class CallService {
@@ -185,6 +187,7 @@ class CallService {
     localStream = null;
     pc?.close();
     pc = null;
+    CallAudio.end();
     localRenderer.dispose();
     remoteRenderer.dispose();
   }
@@ -308,16 +311,23 @@ class CallService {
       'video': video ? {'facingMode': 'user'} : false,
     });
     localRenderer.srcObject = localStream;
+    // Категорию выставили до getUserMedia, а теперь ещё раз
+    // активируем сессию: аудио-модуль WebRTC мог её пересоздать.
+    await CallAudio.activate();
     // Только теперь аудиотрек существует — до этого момента плагин
     // считает, что записывать нечего, и Voice Processing не включается.
     await _activateVoiceProcessing();
   }
 
   /// По умолчанию звук идёт в разговорный динамик телефона (режим
-  /// inCommunication), громкая связь включается кнопкой.
+  /// inCommunication). Исключение — видеозвонок на iOS: там сразу
+  /// включается громкая связь, иначе собеседника не слышно, пока
+  /// телефон не поднесён к уху.
   bool _speakerOn = false;
 
   bool get speakerOn => _speakerOn;
+
+  bool get _isIOS => !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 
   /// Голосовой режим средствами самого flutter_webrtc.
   ///
@@ -350,17 +360,18 @@ class CallService {
         // голоса (Voice Processing I/O): шумоподавление, эхоподавление
         // и нормализация громкости на уровне железа. Именно она даёт
         // звук как при обычном звонке, а не как в приложении записи.
+        //
+        // defaultToSpeaker здесь намеренно нет: с ним система всегда
+        // выбирает динамик и переключение на разговорный динамик
+        // телефона перестаёт работать. Маршрутом управляет нативная
+        // сессия (CallAudio).
         await Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
           appleAudioCategory: AppleAudioCategory.playAndRecord,
           appleAudioCategoryOptions: {
             AppleAudioCategoryOption.allowBluetooth,
-            AppleAudioCategoryOption.defaultToSpeaker,
           },
           appleAudioMode: AppleAudioMode.voiceChat,
         ));
-        // Без этого микрофон отключается системным щелчком, который
-        // в мессенджере только раздражает.
-        await Helper.setMicrophoneMuteMode(MicrophoneMuteMode.inputMixer);
       }
     } catch (e) {
       // Аудио-настройка не должна ронять звонок
@@ -391,19 +402,20 @@ class CallService {
 
   /// Переключить звук: наушник ⇄ громкая связь.
   ///
-  /// Переключение делает нативный код flutter_webrtc: на Android это
-  /// включение speakerphone, на iOS — выбор между разговорным динамиком
-  /// и ухом. Прежний audio_session тут был бессилен — он лишь просил
-  /// систему, а WebRTC её тут же переключал обратно.
+  /// На Android это делает нативный код flutter_webrtc, на iOS —
+  /// нативная аудиосессия: она уже активна, поэтому меняется только
+  /// маршрут вывода. Категорию на ходу не трогаем — её смена во время
+  /// звонка убивает звук собеседника.
   Future<void> toggleSpeaker() async {
     _speakerOn = !_speakerOn;
     if (kIsWeb) return;
     try {
-      if (defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS) {
+      if (_isIOS) {
+        await CallAudio.setSpeaker(_speakerOn);
+      } else if (defaultTargetPlatform == TargetPlatform.android) {
         await Helper.setSpeakerphoneOn(_speakerOn);
-        debugPrint('Звук: ${_speakerOn ? 'динамик' : 'наушник'}');
       }
+      debugPrint('Звук: ${_speakerOn ? 'динамик' : 'наушник'}');
     } catch (e) {
       debugPrint('Не удалось переключить звук: $e');
     }
@@ -421,9 +433,16 @@ class CallService {
     _resetConnected();
     // Ключи догружаются в фоне: звонок их не ждёт.
     warmTurn();
+    // Видео на iOS сразу выводим на динамик, голосовой — на
+    // разговорный динамик телефона.
+    _speakerOn = _isIOS && video;
     try {
+      // Гасим голосовые и кружки: их плеер держит аудиосессию, и
+      // звонок может унаследовать категорию воспроизведения.
+      await VoicePlayer.instance.stop();
       // Голосовой режим — до захвата микрофона и до создания соединения
       await _configureCallAudio();
+      await CallAudio.start(speaker: _speakerOn);
       await _openMic(video: video);
       await _ensurePeerConnection();
       _listenSignals(chatId);
@@ -451,9 +470,17 @@ class CallService {
     _resetConnected();
     warmTurn();
     final payload = Map<String, dynamic>.from(offerRow['payload'] as Map);
+    final video = payload['video'] == true;
+    // Видео на iOS сразу выводим на динамик, голосовой — на
+    // разговорный динамик телефона.
+    _speakerOn = _isIOS && video;
     try {
+      // Рингтон уже остановлен экраном Home, но голосовые и кружки
+      // могли остаться: их плеер держит аудиосессию.
+      await VoicePlayer.instance.stop();
       await _configureCallAudio();
-      await _openMic(video: payload['video'] == true);
+      await CallAudio.start(speaker: _speakerOn);
+      await _openMic(video: video);
       await _ensurePeerConnection();
       _listenSignals(_chatId!);
       _startCallTimer();
@@ -659,6 +686,7 @@ class CallService {
     localStream = null;
     await pc?.close();
     pc = null;
+    await CallAudio.end();
   }
 
   /// Выключить микрофон.

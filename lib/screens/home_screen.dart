@@ -102,13 +102,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   /// Скрыть карточку: ответили, отклонили, или звонок сам кончился.
-  void _dismissIncoming() {
+  ///
+  /// Карточку убираем сразу, а остановки рингтона дожидаемся: плеер
+  /// just_audio держит аудиосессию, и если звонок начнётся раньше,
+  /// WebRTC получит категорию воспроизведения и останется без звука.
+  Future<void> _dismissIncoming() async {
     _autoHide?.cancel();
     _autoHide = null;
     final id = incomingOffer?['id']?.toString();
     if (id != null && id.isNotEmpty) _dismissedOffers.add(id);
-    RingService.stop();
     if (mounted) setState(() => incomingOffer = null);
+    await RingService.stop();
   }
 
   /// Догнать звонок, который пришёл, пока Realtime молчал.
@@ -581,7 +585,7 @@ class CallServiceListen {
 /// Карточка входящего звонка поверх экрана.
 class IncomingCallCard extends StatelessWidget {
   final Map<String, dynamic> offer;
-  final VoidCallback onDismiss;
+  final Future<void> Function() onDismiss;
   const IncomingCallCard(
       {super.key, required this.offer, required this.onDismiss});
 
@@ -636,7 +640,7 @@ class IncomingCallCard extends StatelessWidget {
                       'payload': {},
                     });
                   } catch (_) {}
-                  onDismiss();
+                  await onDismiss();
                 },
                 icon: Container(
                   padding: const EdgeInsets.all(10),
@@ -663,6 +667,11 @@ class IncomingCallCard extends StatelessWidget {
                   // звонка просто не открывался.
                   final nav = Navigator.of(context);
 
+                  // Сначала гасим рингтон и только потом поднимаем
+                  // звонок: иначе плеер рингтона и WebRTC подерутся
+                  // за аудиосессию iOS.
+                  await onDismiss();
+
                   var title = '';
                   String? avatar;
                   try {
@@ -679,7 +688,6 @@ class IncomingCallCard extends StatelessWidget {
                     }
                   } catch (_) {}
 
-                  onDismiss();
                   nav.push(
                     MaterialPageRoute(
                         builder: (_) => CallScreen(
