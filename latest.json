@@ -1,6 +1,6 @@
-{
-  "version": "1.1.8",
-  "notes": "Новый дизайн: неоновая тёмная тема, градиентные пузыри сообщений, разделители дат, нижняя навигация на телефоне вместо бокового меню. Чаты, профиль и панель ввода переделаны под новый стиль.",
-  "apk_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.8/luxe.apk",
-  "zip_url": "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.8/LuxeMessenger-windows.zip"
+﻿{
+    "notes":  "Добавлено: удаление у себя/у всех, копирование, улучшена загрузка вложений. Исправлена нарезка файлов через прокси. Версия 1.1.10+12.",
+    "zip_url":  "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.10/LuxeMessenger-windows.zip",
+    "version":  "1.1.10",
+    "apk_url":  "https://github.com/gfpmmp-del/luxe/releases/download/v1.1.10/luxe.apk"
 }
