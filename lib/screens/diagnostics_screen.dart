@@ -60,10 +60,13 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
       setState(() => _results[i] = _Probe(_results[i].title));
     }
 
-    _set(0,
-        ok: true,
-        detail: '${SupabaseConfig.routeName}\n${SupabaseConfig.url}\n'
-            'Файлы: ${MediaService.proxyBuffered ? 'одним запросом' : 'кусками (прокси старый)'}');
+    _set(
+      0,
+      ok: true,
+      detail:
+          '${SupabaseConfig.routeName}\n${SupabaseConfig.url}\n'
+          'Файлы: ${MediaService.proxyBuffered ? 'одним запросом' : 'сначала одним, при обрыве — кусками'}',
+    );
 
     await Future.wait([
       _restCheck(1, SupabaseConfig.directUrl),
@@ -85,10 +88,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
         ? file.replaceFirst(SupabaseConfig.workerUrl, SupabaseConfig.directUrl)
         : file;
 
-    await Future.wait([
-      _fileCheck(3, direct),
-      _fileCheck(4, viaProxy),
-    ]);
+    await Future.wait([_fileCheck(3, direct), _fileCheck(4, viaProxy)]);
   }
 
   /// Взять реальный файл из хранилища.
@@ -133,14 +133,17 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     final sw = Stopwatch()..start();
     try {
       final req = await client.getUrl(
-          Uri.parse('$base/rest/v1/chat_members?select=chat_id&limit=1'));
+        Uri.parse('$base/rest/v1/chat_members?select=chat_id&limit=1'),
+      );
       req.headers.set('apikey', SupabaseConfig.anonKey);
       req.headers.set('Authorization', 'Bearer ${SupabaseConfig.anonKey}');
       final res = await req.close().timeout(const Duration(seconds: 10));
       await res.drain<void>();
-      _set(index,
-          ok: res.statusCode < 500,
-          detail: 'HTTP ${res.statusCode} • ${sw.elapsedMilliseconds} мс');
+      _set(
+        index,
+        ok: res.statusCode < 500,
+        detail: 'HTTP ${res.statusCode} • ${sw.elapsedMilliseconds} мс',
+      );
     } catch (e) {
       _set(index, ok: false, detail: 'Не отвечает • ${_short(e)}');
     } finally {
@@ -154,16 +157,22 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     try {
       // Ровно этот адрес: без перебора и без подмены маршрута, иначе
       // обе строки проверяют одно и то же.
-      final bytes = await MediaService.fetchBytes(url, exact: true)
-          .timeout(const Duration(seconds: 15));
-      _set(index,
-          ok: bytes.isNotEmpty,
-          detail: '$host\n${bytes.length} байт • ${sw.elapsedMilliseconds} мс'
-              '${MediaService.needsChunks(url) ? ' • кусками' : ''}');
+      final bytes = await MediaService.fetchBytes(
+        url,
+        exact: true,
+      ).timeout(const Duration(seconds: 15));
+      _set(
+        index,
+        ok: bytes.isNotEmpty,
+        detail: '$host\n${bytes.length} байт • ${sw.elapsedMilliseconds} мс',
+      );
     } catch (e) {
-      _set(index,
-          ok: false,
-          detail: '$host\nНе вышло за ${sw.elapsedMilliseconds} мс • ${_short(e)}');
+      _set(
+        index,
+        ok: false,
+        detail:
+            '$host\nНе вышло за ${sw.elapsedMilliseconds} мс • ${_short(e)}',
+      );
     }
   }
 
@@ -212,8 +221,9 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
             'Версия: ${UpdateService.currentVersion}\n'
             '${_fileUrl.isEmpty ? '' : 'Проверочный файл:\n$_fileUrl'}',
             style: TextStyle(
-                fontSize: 11,
-                color: scheme.onSurface.withValues(alpha: 0.5)),
+              fontSize: 11,
+              color: scheme.onSurface.withValues(alpha: 0.5),
+            ),
           ),
         ],
       ),
@@ -225,14 +235,22 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     final Widget icon;
     if (p.ok == null) {
       icon = const SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(strokeWidth: 2));
+        width: 18,
+        height: 18,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
     } else if (p.ok == true) {
-      icon = const Icon(Icons.check_circle_rounded,
-          color: LuxeColors.online, size: 22);
+      icon = const Icon(
+        Icons.check_circle_rounded,
+        color: LuxeColors.online,
+        size: 22,
+      );
     } else {
-      icon = const Icon(Icons.error_rounded, color: LuxeColors.danger, size: 22);
+      icon = const Icon(
+        Icons.error_rounded,
+        color: LuxeColors.danger,
+        size: 22,
+      );
     }
     return ListTile(
       leading: icon,
@@ -242,8 +260,9 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           : SelectableText(
               p.detail!,
               style: TextStyle(
-                  fontSize: 12,
-                  color: scheme.onSurface.withValues(alpha: 0.65)),
+                fontSize: 12,
+                color: scheme.onSurface.withValues(alpha: 0.65),
+              ),
             ),
       isThreeLine: (p.detail ?? '').contains('\n'),
     );

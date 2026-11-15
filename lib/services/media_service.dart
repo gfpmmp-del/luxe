@@ -109,6 +109,27 @@ class MediaService {
     }
   }
 
+  /// Безопасное имя файла для пути в Storage.
+  ///
+  /// Имя из системного диалога может содержать пробелы, `#`, `?`, `%`
+  /// и кириллицу. В публичном URL такие символы ломают путь: `#`
+  /// превращается в якорь, `?` — в начало query, и файл «не находится»,
+  /// хотя загрузился. Для показа имя всё равно берётся из file_name,
+  /// поэтому в пути оставляем только латиницу, цифры и дефис.
+  static String _safeFileName(String name) {
+    final ext = _ext(name).replaceAll(RegExp(r'[^a-z0-9]'), '');
+    var base = ext.isEmpty
+        ? name
+        : name.substring(0, name.length - ext.length - 1);
+    base = base
+        .replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^[_\-.]+|[_\-.]+$'), '');
+    if (base.isEmpty) base = 'file';
+    if (base.length > 60) base = base.substring(0, 60);
+    return ext.isEmpty ? base : '$base.$ext';
+  }
+
   /// Понятная причина, если сеть зависла.
   ///
   /// Раньше загрузка файла не имела таймаута вообще. На сети, где
@@ -120,7 +141,10 @@ class MediaService {
       'Попробуйте ещё раз или откройте при работающей сети.';
 
   static Future<String> _uploadFile(
-      String path, File file, String contentType) async {
+    String path,
+    File file,
+    String contentType,
+  ) async {
     await supabase.storage
         .from('chat-media')
         .upload(
@@ -137,16 +161,15 @@ class MediaService {
   /// Загрузить произвольный файл. Возвращает публичный URL.
   static Future<String> uploadFile(PlatformFile file) async {
     final ts = DateTime.now().millisecondsSinceEpoch;
-    final name = file.name;
-    final path = 'files/$ts-$name';
-    return _uploadFile(path, File(file.path!), _contentType(name));
+    final path = 'files/$ts-${_safeFileName(file.name)}';
+    return _uploadFile(path, File(file.path!), _contentType(file.name));
   }
 
   /// Загрузить фото/видео из галереи (XFile). Возвращает публичный URL.
   static Future<String> uploadMedia(XFile file, String folder) async {
     final ts = DateTime.now().millisecondsSinceEpoch;
     final name = file.name.isEmpty ? 'file.bin' : file.name;
-    final path = '$folder/$ts-$name';
+    final path = '$folder/$ts-${_safeFileName(name)}';
     return _uploadFile(path, File(file.path), _contentType(name));
   }
 
@@ -200,7 +223,7 @@ class MediaService {
         'png',
         'jpg',
         'jpeg',
-        'webp'
+        'webp',
       ],
       allowMultiple: false,
     );
@@ -219,14 +242,16 @@ class MediaService {
   static Future<String> uploadAvatar(String userId, XFile file) {
     final ts = DateTime.now().millisecondsSinceEpoch;
     return _uploadFile(
-        'avatars/$userId-$ts.jpg', File(file.path), 'image/jpeg');
+      'avatars/$userId-$ts.jpg',
+      File(file.path),
+      'image/jpeg',
+    );
   }
 
   /// Аватарка группы/канала.
   static Future<String> uploadChatAvatar(String chatId, XFile file) {
     final ts = DateTime.now().millisecondsSinceEpoch;
-    return _uploadFile(
-        'groups/$chatId-$ts.jpg', File(file.path), 'image/jpeg');
+    return _uploadFile('groups/$chatId-$ts.jpg', File(file.path), 'image/jpeg');
   }
 
   /// Все возможные адреса файла, в порядке предпочтения.
@@ -285,10 +310,24 @@ class MediaService {
   /// соединение; берём с запасом.
   static const int chunkSize = 16 * 1024;
 
+  /// Проверено ли на практике, что этот прокси обрезает обычный ответ.
+  ///
+  /// Флаг ставится только после реальной неудачи: наличие /health
+  /// у развёрнутого воркера — ненадёжный признак. Бывает, что файлы он
+  /// отдаёт целиком, а /health ещё не умеет. Тогда куски по 16 КБ
+  /// превращают одну фотографию в сорок запросов, и на мобильной сети
+  /// она «грузится и не открывается». Сначала всегда пробуем целиком.
+  static bool _workerPlainBroken = false;
+
   /// Идёт ли приложение через воркер.
   static bool get viaProxy => SupabaseConfig.viaProxy;
 
   /// Нужно ли тянуть этот адрес кусками.
+  ///
+  /// Так решают плееры и Lottie: они не умеют сами переключаться с
+  /// целого файла на куски, поэтому при непроверенном прокси им проще
+  /// сразу получить локальную копию. Сам [fetchBytes] при этом сначала
+  /// всё равно пробует обычный запрос — см. [_fetchOne].
   static bool needsChunks(String? url) {
     if (url == null || url.isEmpty) return false;
     if (proxyBuffered) return false;
@@ -297,8 +336,9 @@ class MediaService {
 
   /// Спросить у воркера, обновлён ли он.
   ///
-  /// Новый воркер отвечает на /health строкой «buffered». Старый такого
-  /// адреса не знает и отдаёт 404 от Supabase — значит, куски.
+  /// Новый воркер отвечает на /health строкой «buffered». Если ответа
+  /// нет — это ещё не повод качать кусками: решение принимает первая
+  /// реальная загрузка (см. [_workerPlainBroken]).
   static Future<void> probeProxy() async {
     if (!SupabaseConfig.viaProxy) {
       proxyBuffered = false;
@@ -312,10 +352,14 @@ class MediaService {
           .getUrl(Uri.parse('${SupabaseConfig.workerUrl}/health'))
           .timeout(const Duration(seconds: 4));
       final res = await req.close().timeout(const Duration(seconds: 4));
-      final body =
-          await res.transform(const Utf8Decoder()).join().timeout(const Duration(seconds: 4));
+      final body = await res
+          .transform(const Utf8Decoder())
+          .join()
+          .timeout(const Duration(seconds: 4));
       proxyBuffered = res.statusCode == 200 && body.contains('buffered');
-      debugPrint('Прокси: ${proxyBuffered ? 'обновлён' : 'старый, качаем кусками'}');
+      debugPrint(
+        'Прокси: ${proxyBuffered ? 'отдаёт файлы целиком' : 'проверим при первой загрузке'}',
+      );
     } catch (e) {
       proxyBuffered = false;
       debugPrint('Прокси не ответил на проверку: $e');
@@ -327,6 +371,7 @@ class MediaService {
   static final Map<String, Uint8List> _images = {};
   static final Map<String, Future<Uint8List>> _loading = {};
   static int _imagesBytes = 0;
+
   /// Больше 32 МБ картинок в памяти не держим: на телефоне это уже
   /// заметно, а листать чат с сотней фотографий никто не станет.
   static const int _imagesLimit = 32 * 1024 * 1024;
@@ -339,18 +384,30 @@ class MediaService {
     final running = _loading[url];
     if (running != null) return running;
 
-    final future = fetchBytes(url).then((bytes) {
-      _imagesBytes += bytes.length;
-      _images[url] = bytes;
-      while (_imagesBytes > _imagesLimit && _images.length > 1) {
-        final key = _images.keys.first;
-        final old = _images.remove(key);
-        _imagesBytes -= old?.length ?? 0;
-      }
-      return bytes;
-    }).whenComplete(() => _loading.remove(url));
+    final future = fetchBytes(url)
+        .then((bytes) {
+          _imagesBytes += bytes.length;
+          _images[url] = bytes;
+          while (_imagesBytes > _imagesLimit && _images.length > 1) {
+            final key = _images.keys.first;
+            final old = _images.remove(key);
+            _imagesBytes -= old?.length ?? 0;
+          }
+          return bytes;
+        })
+        .whenComplete(() => _loading.remove(url));
     _loading[url] = future;
     return future;
+  }
+
+  /// Убрать картинку из кэша.
+  ///
+  /// Если файл пришёл битым (оборванный ответ, страница блокировки вместо
+  /// картинки), повторное нажатие должно скачать его заново, а не
+  /// бесконечно показывать те же нечитаемые байты.
+  static void forgetImage(String url) {
+    final old = _images.remove(url);
+    if (old != null) _imagesBytes -= old.length;
   }
 
   /// Какой маршрут реально тянет файлы.
@@ -383,11 +440,8 @@ class MediaService {
     final ordered = _preferredOrder(targets);
     Object? last;
     for (final target in ordered) {
-      final byChunks = chunked ?? needsChunks(target);
       try {
-        final bytes = byChunks
-            ? await _rangedBytes(target)
-            : await _plainBytes(target);
+        final bytes = await _fetchOne(target, chunked: chunked);
         _remember(target, ok: true);
         return bytes;
       } catch (e) {
@@ -397,6 +451,35 @@ class MediaService {
       }
     }
     throw Exception(last?.toString() ?? 'Не удалось загрузить файл');
+  }
+
+  /// Скачать один адрес.
+  ///
+  /// Сначала обычным запросом: так быстрее всего. Только если прокси
+  /// реально оборвал тело, переключаемся на куски и запоминаем это.
+  /// [chunked] принудительно задаёт способ (нужно проверке связи).
+  static Future<Uint8List> _fetchOne(String target, {bool? chunked}) async {
+    if (chunked == true) return _rangedBytes(target);
+    if (chunked == false) return _plainBytes(target);
+
+    final worker = target.contains('workers.dev');
+    if (worker && _workerPlainBroken) return _rangedBytes(target);
+
+    try {
+      final bytes = await _plainBytes(target);
+      // Маленький файл ничего не доказывает: старый прокси рвёт всё,
+      // что больше ~22 КБ. Считаем маршрут исправным только после
+      // нормального по размеру ответа.
+      if (worker && bytes.length > 64 * 1024) proxyBuffered = true;
+      return bytes;
+    } on _TruncatedBody catch (e) {
+      if (!worker) rethrow;
+      // Обрыв тела — единственный повод перейти на куски. Ошибка вроде
+      // 404 не должна переключать весь прокси в медленный режим.
+      debugPrint('Прокси отдал файл не целиком, качаем кусками: $e');
+      _workerPlainBroken = true;
+      return _rangedBytes(target);
+    }
   }
 
   /// Ставит первым тот маршрут, который уже доказал, что тянет файлы.
@@ -414,27 +497,29 @@ class MediaService {
   }
 
   /// Гонка двух маршрутов: кто первый отдал файл целиком, тот и выиграл.
-  static Future<Uint8List> _firstSuccess(
-      List<String> targets, bool? chunked) {
+  static Future<Uint8List> _firstSuccess(List<String> targets, bool? chunked) {
     final completer = Completer<Uint8List>();
     var errors = 0;
     Object? last;
 
     for (final target in targets) {
-      final byChunks = chunked ?? needsChunks(target);
-      final job = byChunks ? _rangedBytes(target) : _plainBytes(target);
-      job.then((bytes) {
-        if (completer.isCompleted) return;
-        _remember(target, ok: true);
-        completer.complete(bytes);
-      }, onError: (Object e) {
-        last = e;
-        errors++;
-        if (errors >= targets.length && !completer.isCompleted) {
-          completer.completeError(
-              Exception(last?.toString() ?? 'Не удалось загрузить файл'));
-        }
-      });
+      final job = _fetchOne(target, chunked: chunked);
+      job.then(
+        (bytes) {
+          if (completer.isCompleted) return;
+          _remember(target, ok: true);
+          completer.complete(bytes);
+        },
+        onError: (Object e) {
+          last = e;
+          errors++;
+          if (errors >= targets.length && !completer.isCompleted) {
+            completer.completeError(
+              Exception(last?.toString() ?? 'Не удалось загрузить файл'),
+            );
+          }
+        },
+      );
     }
     return completer.future;
   }
@@ -444,15 +529,20 @@ class MediaService {
       ..connectionTimeout = Net.connectTimeout
       ..idleTimeout = Net.idleTimeout;
     try {
-      final req = await client.getUrl(Uri.parse(url)).timeout(Net.connectTimeout);
+      final req = await client
+          .getUrl(Uri.parse(url))
+          .timeout(Net.connectTimeout);
+      // Сжатие только мешает: content-length относится к упакованному
+      // телу, а сравнивать его будем с распакованными байтами.
+      req.headers.set('Accept-Encoding', 'identity');
       final res = await req.close().timeout(Net.connectTimeout);
       if (res.statusCode != 200) {
         throw Exception('Сервер ответил кодом ${res.statusCode}');
       }
-      final bytes = await _readAll(res).timeout(const Duration(seconds: 60));
+      final bytes = await _readAll(res);
       final expected = res.contentLength;
       if (expected > 0 && bytes.length < expected) {
-        throw Exception('Пришло ${bytes.length} из $expected байт');
+        throw _TruncatedBody('Пришло ${bytes.length} из $expected байт');
       }
       return bytes;
     } finally {
@@ -499,7 +589,10 @@ class MediaService {
   }
 
   static Future<({Uint8List bytes, int total})> _rangeOnce(
-      String url, int from, int to) async {
+    String url,
+    int from,
+    int to,
+  ) async {
     // Клиент на каждый кусок — не прихоть. Cloudflare после ответа
     // оставляет соединение в таком состоянии, что следующий запрос по
     // нему уходит в никуда и висит до таймаута. С новым соединением
@@ -508,8 +601,9 @@ class MediaService {
       ..connectionTimeout = Net.connectTimeout
       ..idleTimeout = const Duration(seconds: 10);
     try {
-      final req =
-          await client.getUrl(Uri.parse(url)).timeout(Net.connectTimeout);
+      final req = await client
+          .getUrl(Uri.parse(url))
+          .timeout(Net.connectTimeout);
       req.headers.set('Range', 'bytes=$from-$to');
       // Сжатие на этом пути только мешает: заголовок длины относится
       // к исходному файлу, а байты приходят упакованными.
@@ -541,8 +635,21 @@ class MediaService {
 
   static Future<Uint8List> _readAll(HttpClientResponse res) async {
     final builder = BytesBuilder(copy: false);
-    await for (final chunk in res) {
-      builder.add(chunk);
+    // Если тело оборвалось, соединение обычно не закрывается — телефон
+    // ждёт продолжения до системного таймаута. Поэтому рвём чтение
+    // сами: 12 секунд без единого байта — это уже не медленная сеть,
+    // а оборванный ответ. Так старый прокси определяется за секунды,
+    // а не за минуту.
+    try {
+      await for (final chunk in res.timeout(const Duration(seconds: 12))) {
+        builder.add(chunk);
+      }
+    } on TimeoutException {
+      throw const _TruncatedBody('Тело ответа оборвалось');
+    } on HttpException catch (e) {
+      throw _TruncatedBody('Соединение закрылось: ${e.message}');
+    } on SocketException catch (e) {
+      throw _TruncatedBody('Соединение сброшено: ${e.message}');
     }
     return builder.takeBytes();
   }
@@ -600,9 +707,10 @@ class MediaService {
         ..idleTimeout = Net.idleTimeout;
       try {
         final req = await client.getUrl(Uri.parse(target));
+        req.headers.set('Accept-Encoding', 'identity');
         final res = await req.close().timeout(Net.connectTimeout);
         final len = res.contentLength;
-        res.drain<void>();
+        await res.drain<void>().timeout(const Duration(seconds: 8));
         return len;
       } catch (e) {
         debugPrint('Не удалось получить размер файла: $e');
@@ -644,9 +752,11 @@ class MediaService {
   static Future<String> _downloadOne(String url, String fileName) async {
     final target = await _downloadTarget(fileName);
 
-    // Старый прокси присылает файл обрезанным — тянем кусками.
-    if (needsChunks(url)) {
-      final bytes = await _rangedBytes(url);
+    // Через воркер качаем общим путём: он сам определяет, отдаёт ли
+    // прокси файл целиком, и при обрыве переходит на куски. Так на диск
+    // не попадёт обрезанный файл, который потом «не открывается».
+    if (url.contains('workers.dev')) {
+      final bytes = await fetchBytes(url, exact: true);
       await target.writeAsBytes(bytes, flush: true);
       return target.path;
     }
@@ -658,17 +768,39 @@ class MediaService {
       final req = await client
           .getUrl(Uri.parse(url))
           .timeout(Net.connectTimeout);
+      req.headers.set('Accept-Encoding', 'identity');
       final res = await req.close().timeout(Net.connectTimeout);
       if (res.statusCode != 200) {
         throw Exception('Сервер ответил кодом ${res.statusCode}');
       }
 
       final sink = target.openWrite();
-      // Файл может качаться долго, поэтому потолок на поток данных
-      // общий, а не на соединение.
-      await res.pipe(sink).timeout(const Duration(minutes: 5));
-      await sink.flush();
-      await sink.close();
+      var received = 0;
+      try {
+        // Файл может качаться долго, но пауза без данных — это обрыв.
+        await for (final chunk in res.timeout(const Duration(seconds: 20))) {
+          received += chunk.length;
+          sink.add(chunk);
+        }
+        await sink.flush();
+        await sink.close();
+      } catch (e) {
+        try {
+          await sink.close();
+        } catch (_) {}
+        try {
+          await target.delete();
+        } catch (_) {}
+        rethrow;
+      }
+
+      final expected = res.contentLength;
+      if (expected > 0 && received < expected) {
+        try {
+          await target.delete();
+        } catch (_) {}
+        throw Exception('Пришло $received из $expected байт');
+      }
       return target.path;
     } on TimeoutException {
       throw Exception(_hungError('Файл не скачивается'));
@@ -715,8 +847,10 @@ class MediaService {
   static double? _mp4Duration(List<int> b) {
     // mvhd: версия 0 — 4-байтные поля, версия 1 — 8-байтные.
     for (var i = 0; i + 24 < b.length; i++) {
-      if (b[i] == 0x6D && b[i + 1] == 0x76 &&
-          b[i + 2] == 0x68 && b[i + 3] == 0x64) {
+      if (b[i] == 0x6D &&
+          b[i + 1] == 0x76 &&
+          b[i + 2] == 0x68 &&
+          b[i + 3] == 0x64) {
         final version = b[i + 4];
         if (version == 1) {
           if (i + 32 >= b.length) return null;
@@ -771,4 +905,17 @@ class MediaService {
         : v.toStringAsFixed(1);
     return '$s ${units[u]}';
   }
+}
+
+/// Ответ оборвался: сервер прислал меньше, чем обещал, или замолчал.
+///
+/// Отдельный тип нужен, чтобы не путать обрыв тела с обычной ошибкой
+/// (404, 401, нет сети): только по обрыву имеет смысл переходить на
+/// загрузку кусками.
+class _TruncatedBody implements Exception {
+  final String message;
+  const _TruncatedBody(this.message);
+
+  @override
+  String toString() => message;
 }

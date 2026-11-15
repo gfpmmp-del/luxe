@@ -105,19 +105,22 @@ class ChatService {
       'профили людей',
     );
     return ChatListData(
-        (chats as List).cast<Map<String, dynamic>>(), membersByChat, profiles);
+      (chats as List).cast<Map<String, dynamic>>(),
+      membersByChat,
+      profiles,
+    );
   }
 
   /// Профили пользователей по списку id. Запросы режутся порциями,
   /// иначе длинный список упирается в лимит длины URL у PostgREST.
   static Future<Map<String, Map<String, dynamic>>> profilesByIds(
-      List<String> ids) async {
+    List<String> ids,
+  ) async {
     final out = <String, Map<String, dynamic>>{};
     if (ids.isEmpty) return out;
     const chunkSize = 100;
     for (var i = 0; i < ids.length; i += chunkSize) {
-      final end =
-          (i + chunkSize) > ids.length ? ids.length : (i + chunkSize);
+      final end = (i + chunkSize) > ids.length ? ids.length : (i + chunkSize);
       final rows = await _query(
         () => supabase
             .from('profiles')
@@ -141,7 +144,8 @@ class ChatService {
 
   /// Название + аватарка для списка чатов.
   static Future<Map<String, String?>> chatDisplay(
-      Map<String, dynamic> chat) async {
+    Map<String, dynamic> chat,
+  ) async {
     final kind = chatKind(chat);
     if (kind == 'direct') {
       final members = await supabase
@@ -159,7 +163,9 @@ class ChatService {
           .select('display_name, username, avatar_url')
           .eq('id', otherId)
           .maybeSingle();
-      final p = profile == null ? null : Map<String, dynamic>.from(profile as Map);
+      final p = profile == null
+          ? null
+          : Map<String, dynamic>.from(profile as Map);
       return {
         'title': (p?['display_name'] ?? p?['username'] ?? 'Чат') as String?,
         'avatar': p?['avatar_url'] as String?,
@@ -167,8 +173,9 @@ class ChatService {
       };
     }
     return {
-      'title': ((chat['title'] ?? (kind == 'channel' ? 'Канал' : 'Группа')))
-          as String?,
+      'title':
+          ((chat['title'] ?? (kind == 'channel' ? 'Канал' : 'Группа')))
+              as String?,
       'avatar': chat['avatar_url'] as String?,
       'kind': kind,
     };
@@ -196,11 +203,33 @@ class ChatService {
         .eq('chat_id', chatId)
         .order('created_at', ascending: true)
         .limit(200);
-    return (rows as List).cast<Map<String, dynamic>>();
+    final result = (rows as List).cast<Map<String, dynamic>>();
+
+    // Сообщения, скрытые этим пользователем. Таблицы может ещё не быть,
+    // если миграция не применена: тогда просто показываем всё.
+    try {
+      final hidden = await supabase
+          .from('message_hides')
+          .select('message_id')
+          .eq('chat_id', chatId)
+          .eq('user_id', AuthService.myId);
+      final ids = (hidden as List)
+          .map((e) => e['message_id'])
+          .whereType<String>()
+          .toSet();
+      if (ids.isEmpty) return result;
+      return result.where((m) => !ids.contains(m['id'])).toList();
+    } catch (e) {
+      debugPrint('Скрытые сообщения не загрузились: $e');
+      return result;
+    }
   }
 
   /// Отправить текст. Возвращает вставленную строку или null.
-  static Future<Map<String, dynamic>?> sendText(String chatId, String text) async {
+  static Future<Map<String, dynamic>?> sendText(
+    String chatId,
+    String text,
+  ) async {
     if (text.trim().isEmpty) return null;
     final row = await supabase
         .from('messages')
@@ -216,21 +245,46 @@ class ChatService {
     return Map<String, dynamic>.from(row as Map);
   }
 
-  /// Удаление сообщения
-  static Future<void> deleteMessage(String messageId) async {
+  /// Удалить сообщение у всех участников.
+  ///
+  /// Это обычное удаление строки: Realtime пришлёт DELETE, и сообщение
+  /// исчезнет у всех, у кого открыт чат. В интерфейсе действие доступно
+  /// только для своих сообщений.
+  static Future<void> deleteForEveryone(String messageId) async {
     await supabase.from('messages').delete().eq('id', messageId);
+  }
+
+  /// Скрыть сообщение только у текущего пользователя.
+  ///
+  /// Строка сообщения остаётся в базе — её по-прежнему видят остальные.
+  /// Запись в message_hides переживает перезапуск и применяется на всех
+  /// устройствах пользователя.
+  static Future<void> hideForMe(String messageId, String chatId) async {
+    await supabase.from('message_hides').upsert({
+      'message_id': messageId,
+      'user_id': AuthService.myId,
+      'chat_id': chatId,
+    }, onConflict: 'message_id,user_id');
   }
 
   /// Отправить файл. Возвращает вставленную строку или null.
   ///
   /// [type]: 'image' | 'video' | 'file' — определяет вид вложения в чате.
+  /// [size]: размер файла в байтах. Берётся с устройства, а не отдельным
+  /// запросом к серверу: раньше ожидание размера могло зависнуть и
+  /// сообщение подолгу висело со спиннером.
   ///
   /// Важно: колонки file_name/file_size могут отсутствовать в БД, поэтому
   /// они не входят в INSERT — иначе отправка падает целиком. Дописываем
   /// их отдельным UPDATE, ошибку которого игнорируем.
   static Future<Map<String, dynamic>?> sendFile(
-      String chatId, String fileUrl, String fileName,
-      {String type = 'file', String caption = ''}) async {
+    String chatId,
+    String fileUrl,
+    String fileName, {
+    String type = 'file',
+    String caption = '',
+    int size = 0,
+  }) async {
     final row = await supabase
         .from('messages')
         .insert({
@@ -248,13 +302,13 @@ class ChatService {
     try {
       await supabase
           .from('messages')
-          .update({'file_name': fileName, 'file_size': 0})
+          .update({'file_name': fileName, 'file_size': size})
           .eq('id', saved['id']);
     } catch (_) {
       // Колонки не добавлены — работаем без них, имя берём из content
     }
     saved['file_name'] = fileName;
-    saved['file_size'] = 0;
+    saved['file_size'] = size;
     return saved;
   }
 
@@ -353,7 +407,7 @@ class ChatService {
         .insert({
           'is_group': false,
           'kind': 'direct',
-          'created_by': AuthService.myId
+          'created_by': AuthService.myId,
         })
         .select()
         .single();
@@ -381,9 +435,10 @@ class ChatService {
         .select()
         .single();
     final id = chat['id'] as String;
-    final members = {AuthService.myId, ...memberIds}
-        .map((u) => {'chat_id': id, 'user_id': u})
-        .toList();
+    final members = {
+      AuthService.myId,
+      ...memberIds,
+    }.map((u) => {'chat_id': id, 'user_id': u}).toList();
     await supabase.from('chat_members').insert(members);
     if (avatar != null) {
       final url = await MediaService.uploadChatAvatar(id, avatar);
@@ -411,9 +466,10 @@ class ChatService {
         .select()
         .single();
     final id = chat['id'] as String;
-    final members = {AuthService.myId, ...memberIds}
-        .map((u) => {'chat_id': id, 'user_id': u})
-        .toList();
+    final members = {
+      AuthService.myId,
+      ...memberIds,
+    }.map((u) => {'chat_id': id, 'user_id': u}).toList();
     await supabase.from('chat_members').insert(members);
     if (avatar != null) {
       final url = await MediaService.uploadChatAvatar(id, avatar);
@@ -452,9 +508,10 @@ class ChatService {
   }
 
   static Future<void> addMember(String chatId, String userId) {
-    return supabase
-        .from('chat_members')
-        .insert({'chat_id': chatId, 'user_id': userId});
+    return supabase.from('chat_members').insert({
+      'chat_id': chatId,
+      'user_id': userId,
+    });
   }
 
   static Future<void> removeMember(String chatId, String userId) {
@@ -485,10 +542,12 @@ class ChatService {
 
   /// Пометить сообщения от собеседника как прочитанные
   static Future<void> markAsRead(String chatId) async {
-    await supabase.from('messages').update({'status': 'read'})
-      .eq('chat_id', chatId)
-      .neq('sender_id', AuthService.myId)
-      .neq('status', 'read');
+    await supabase
+        .from('messages')
+        .update({'status': 'read'})
+        .eq('chat_id', chatId)
+        .neq('sender_id', AuthService.myId)
+        .neq('status', 'read');
   }
 
   /// Поиск людей по имени пользователя или отображаемому имени.

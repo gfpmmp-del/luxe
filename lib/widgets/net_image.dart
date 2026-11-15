@@ -92,7 +92,7 @@ class _NetImageState extends State<NetImage> {
     // Файл теперь всегда качается целиком перед показом, и через
     // старый прокси это куски. Даём запас времени: таймер всё равно
     // снимается, как только байты пришли.
-    _timer = Timer(const Duration(seconds: 60), _nextOrFail);
+    _timer = Timer(const Duration(seconds: 90), _nextOrFail);
   }
 
   /// Следующий адрес, а если их больше нет — заглушка.
@@ -150,18 +150,27 @@ class _NetImageState extends State<NetImage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.cloud_off_rounded,
-                  size: 24, color: dark ? Colors.white38 : Colors.black38),
+              Icon(
+                Icons.cloud_off_rounded,
+                size: 24,
+                color: dark ? Colors.white38 : Colors.black38,
+              ),
               const SizedBox(height: 4),
-              Text('Не открылось',
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: dark ? Colors.white54 : Colors.black54)),
-              Text('Нажмите, чтобы повторить',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      fontSize: 9,
-                      color: dark ? Colors.white38 : Colors.black45)),
+              Text(
+                'Не открылось',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: dark ? Colors.white54 : Colors.black54,
+                ),
+              ),
+              Text(
+                'Нажмите, чтобы повторить',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 9,
+                  color: dark ? Colors.white38 : Colors.black45,
+                ),
+              ),
             ],
           ),
         ),
@@ -259,6 +268,9 @@ class _BytesImageState extends State<_BytesImage> {
     } catch (_) {
       if (!mounted) return;
       _grace?.cancel();
+      // Битые/оборванные байты не должны остаться в кэше: иначе повтор
+      // будет показывать ту же ошибку, даже когда сеть уже в порядке.
+      MediaService.forgetImage(widget.url);
       setState(() => _failed = true);
       widget.onError();
     }
@@ -280,6 +292,10 @@ class _BytesImageState extends State<_BytesImage> {
         fit: widget.fit,
         gaplessPlayback: true,
         errorBuilder: (c, e, s) {
+          // Байты пришли, но это не картинка (HTML-заглушка сети,
+          // оборванный файл). Убираем их из кэша перед следующей
+          // попыткой.
+          MediaService.forgetImage(widget.url);
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) widget.onError();
           });
@@ -300,12 +316,15 @@ class _BytesImageState extends State<_BytesImage> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
                 const SizedBox(height: 4),
-                const Text('Загружаем…',
-                    style: TextStyle(fontSize: 10, color: LuxeColors.danger)),
+                const Text(
+                  'Загружаем…',
+                  style: TextStyle(fontSize: 10, color: LuxeColors.danger),
+                ),
               ],
             )
           : const SizedBox(
@@ -322,9 +341,11 @@ class _BytesImageState extends State<_BytesImage> {
       height: widget.height,
       color: widget.bg,
       alignment: Alignment.center,
-      child: Icon(icon,
-          size: 22,
-          color: widget.dark ? Colors.white24 : Colors.black26),
+      child: Icon(
+        icon,
+        size: 22,
+        color: widget.dark ? Colors.white24 : Colors.black26,
+      ),
     );
   }
 }

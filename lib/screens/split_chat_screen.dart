@@ -8,6 +8,7 @@ import '../services/chat_service.dart';
 import '../services/media_service.dart';
 import '../theme/luxe_theme.dart';
 import '../widgets/luxe_widgets.dart';
+import '../widgets/message_actions.dart';
 import '../widgets/net_image.dart';
 import '../widgets/ticks.dart';
 import '../widgets/verified_badge.dart';
@@ -87,9 +88,9 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     } catch (e) {
       debugPrint('Чат не загрузился: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Не удалось загрузить чат: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Не удалось загрузить чат: $e')));
       }
       _listen();
     }
@@ -120,8 +121,8 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
         final m = Map<String, dynamic>.from(row as Map);
         _description = m['description'] as String?;
         if (_avatar == null) _avatar = m['avatar_url'] as String?;
-        canPost = widget.kind != 'channel' ||
-            m['created_by'] == AuthService.myId;
+        canPost =
+            widget.kind != 'channel' || m['created_by'] == AuthService.myId;
       }
       if (widget.kind == 'group') {
         memberCount = await ChatService.memberCount(widget.chatId);
@@ -137,50 +138,83 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     _listen();
   }
 
-  /// Подписка на сообщения: INSERT — новое сообщение, UPDATE — прочитано/доставлено.
+  /// Подписка на изменения: INSERT — новое сообщение, UPDATE — прочитано
+  /// или изменилось, DELETE — удаление у всех, message_hides — удаление
+  /// у себя на другом устройстве.
   void _listen() {
     final chatId = widget.chatId;
-    msgCh = supabase.channel('msg:$chatId:${DateTime.now().microsecondsSinceEpoch}')
-      ..onPostgresChanges(
-        event: PostgresChangeEvent.insert,
-        schema: 'public',
-        table: 'messages',
-        callback: (payload) {
-          if (payload.newRecord['chat_id'] != chatId) return;
-          if (!mounted) return;
-          // Защита от дублей: сверяемся с уже загруженными по id
-          final id = payload.newRecord['id'];
-          if (msgs.any((m) => m['id'] == id)) return;
-          setState(() => msgs.add(Map<String, dynamic>.from(payload.newRecord)));
-          _scrollDown();
-        },
-      )
-      ..onPostgresChanges(
-        event: PostgresChangeEvent.update,
-        schema: 'public',
-        table: 'messages',
-        callback: (payload) {
-          if (payload.newRecord['chat_id'] != chatId) return;
-          if (!mounted) return;
-          final id = payload.newRecord['id'];
-          setState(() {
-            for (final m in msgs) {
-              if (m['id'] == id) {
-                m['status'] = payload.newRecord['status'];
-              }
-            }
-          });
-        },
-      )
-      ..subscribe();
+    msgCh =
+        supabase.channel('msg:$chatId:${DateTime.now().microsecondsSinceEpoch}')
+          ..onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: 'messages',
+            callback: (payload) {
+              if (payload.newRecord['chat_id'] != chatId) return;
+              if (!mounted) return;
+              // Защита от дублей: сверяемся с уже загруженными по id
+              final id = payload.newRecord['id'];
+              if (msgs.any((m) => m['id'] == id)) return;
+              setState(
+                () => msgs.add(Map<String, dynamic>.from(payload.newRecord)),
+              );
+              _scrollDown();
+            },
+          )
+          ..onPostgresChanges(
+            event: PostgresChangeEvent.update,
+            schema: 'public',
+            table: 'messages',
+            callback: (payload) {
+              if (payload.newRecord['chat_id'] != chatId) return;
+              if (!mounted) return;
+              final id = payload.newRecord['id'];
+              final i = msgs.indexWhere((m) => m['id'] == id);
+              if (i == -1) return;
+              setState(
+                () => msgs[i] = Map<String, dynamic>.from(payload.newRecord),
+              );
+            },
+          )
+          ..onPostgresChanges(
+            event: PostgresChangeEvent.delete,
+            schema: 'public',
+            table: 'messages',
+            callback: (payload) {
+              if (!mounted) return;
+              // В old_record приходит только первичный ключ — chat_id может
+              // отсутствовать. Убираем по id: чужие сообщения просто не
+              // найдутся в текущем списке.
+              final id = payload.oldRecord['id'];
+              if (id == null) return;
+              setState(() => msgs.removeWhere((m) => m['id'] == id));
+            },
+          )
+          ..onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: 'message_hides',
+            callback: (payload) {
+              final row = payload.newRecord;
+              if (row['chat_id'] != chatId) return;
+              if (row['user_id'] != AuthService.myId) return;
+              if (!mounted) return;
+              setState(
+                () => msgs.removeWhere((m) => m['id'] == row['message_id']),
+              );
+            },
+          )
+          ..subscribe();
   }
 
   void _scrollDown() {
     Future.delayed(const Duration(milliseconds: 200), () {
       if (scroll.hasClients) {
-        scroll.animateTo(scroll.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut);
+        scroll.animateTo(
+          scroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
       }
     });
   }
@@ -214,22 +248,15 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     final pending = _addPending(type, file.name, null);
     try {
       final url = await MediaService.uploadFile(file);
-      final saved = await ChatService.sendFile(widget.chatId, url, file.name,
-          type: type, caption: file.name);
-      if (saved != null) {
-        final size = await MediaService.remoteSize(url);
-        if (size > 0) {
-          try {
-            await supabase
-                .from('messages')
-                .update({'file_size': size})
-                .eq('id', saved['id']);
-          } catch (_) {
-            // Колонки file_size может не быть — не критично
-          }
-        }
-        _replacePending(pending, {...saved, 'file_size': size});
-      }
+      final saved = await ChatService.sendFile(
+        widget.chatId,
+        url,
+        file.name,
+        type: type,
+        caption: file.name,
+        size: file.size,
+      );
+      if (saved != null) _replacePending(pending, saved);
     } catch (e) {
       debugPrint('Не удалось отправить файл: $e');
       _markPendingFailed(pending);
@@ -244,11 +271,18 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     final name = f.name.isEmpty ? 'photo.jpg' : f.name;
     final pending = _addPending('image', name, null);
     try {
+      final size = await f.length();
       final url = await MediaService.uploadPhoto(f);
       final caption = input.text.trim();
       input.clear();
-      final saved = await ChatService.sendFile(widget.chatId, url, name,
-          type: 'image', caption: caption);
+      final saved = await ChatService.sendFile(
+        widget.chatId,
+        url,
+        name,
+        type: 'image',
+        caption: caption,
+        size: size,
+      );
       if (saved != null) _replacePending(pending, saved);
     } catch (e) {
       debugPrint('Не удалось отправить фото: $e');
@@ -264,9 +298,16 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     final name = f.name.isEmpty ? 'video.mp4' : f.name;
     final pending = _addPending('video', name, null);
     try {
+      final size = await f.length();
       final url = await MediaService.uploadVideo(f);
-      final saved = await ChatService.sendFile(widget.chatId, url, name,
-          type: 'video', caption: name);
+      final saved = await ChatService.sendFile(
+        widget.chatId,
+        url,
+        name,
+        type: 'video',
+        caption: name,
+        size: size,
+      );
       if (saved != null) _replacePending(pending, saved);
     } catch (e) {
       debugPrint('Не удалось отправить видео: $e');
@@ -307,7 +348,11 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     try {
       final url = await MediaService.uploadVoice(file);
       final saved = await ChatService.sendVoice(
-          widget.chatId, url, seconds, waveform);
+        widget.chatId,
+        url,
+        seconds,
+        waveform,
+      );
       if (saved != null) _replacePending(pending, saved);
     } catch (e) {
       debugPrint('Голосовое не отправилось: $e');
@@ -357,11 +402,22 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     }
   }
 
-  void _replacePending(Map<String, dynamic> pending, Map<String, dynamic> saved) {
+  void _replacePending(
+    Map<String, dynamic> pending,
+    Map<String, dynamic> saved,
+  ) {
     if (!mounted) return;
     setState(() {
       final i = msgs.indexWhere((m) => m['id'] == pending['id']);
-      if (i != -1) msgs[i] = saved;
+      if (i == -1) return;
+      // Realtime мог уже прислать настоящую строку раньше, чем вернулся
+      // ответ на вставку. Тогда временную просто убираем, иначе в чате
+      // появится дубль.
+      if (msgs.any((m) => m['id'] == saved['id'])) {
+        msgs.removeAt(i);
+      } else {
+        msgs[i] = saved;
+      }
     });
   }
 
@@ -382,25 +438,77 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
         .replaceAll('Exception: ', '')
         .replaceAll('PostgrestException', '')
         .trim();
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('$title: $clean')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('$title: $clean')));
+  }
+
+  /// Меню сообщения по долгому нажатию.
+  Future<void> _messageMenu(Map<String, dynamic> m, bool mine) async {
+    final id = m['id'] as String?;
+    if (id == null) return;
+    final pending = id.startsWith('pending-');
+    final url = MediaService.fixUrl(m['file_url'] as String?);
+    final canSave = !pending && url != null && url.isNotEmpty;
+
+    final action = await showMessageActions(
+      context,
+      message: m,
+      mine: mine,
+      canSave: canSave,
+    );
+    if (!mounted || action == null) return;
+
+    switch (action) {
+      case MessageAction.copy:
+        break;
+      case MessageAction.save:
+        if (canSave) await _saveFile(context, url, m);
+        break;
+      case MessageAction.deleteForMe:
+        try {
+          if (!pending) {
+            await ChatService.hideForMe(id, widget.chatId);
+          }
+          if (mounted) {
+            setState(() => msgs.removeWhere((msg) => msg['id'] == id));
+          }
+        } catch (e) {
+          if (mounted) _showError('Не удалось удалить у себя', e);
+        }
+        break;
+      case MessageAction.deleteForAll:
+        final ok = await confirmDeleteForAll(context);
+        if (!ok || !mounted) return;
+        try {
+          await ChatService.deleteForEveryone(id);
+          if (mounted) {
+            setState(() => msgs.removeWhere((msg) => msg['id'] == id));
+          }
+        } catch (e) {
+          if (mounted) _showError('Не удалось удалить у всех', e);
+        }
+    }
   }
 
   void openCall(bool video) {
     if (otherId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Звонки доступны только в личных чатах')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Звонки доступны только в личных чатах')),
+      );
       return;
     }
     Navigator.push(
       context,
       MaterialPageRoute(
-          builder: (_) => CallScreen(
-              chatId: widget.chatId,
-              calleeId: otherId,
-              title: widget.title,
-              avatarUrl: _avatar,
-              video: video)),
+        builder: (_) => CallScreen(
+          chatId: widget.chatId,
+          calleeId: otherId,
+          title: widget.title,
+          avatarUrl: _avatar,
+          video: video,
+        ),
+      ),
     );
   }
 
@@ -423,12 +531,14 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
             child: Row(
               children: [
                 IconButton(
-                    onPressed: widget.onClose,
-                    icon: const Icon(Icons.arrow_back)),
+                  onPressed: widget.onClose,
+                  icon: const Icon(Icons.arrow_back),
+                ),
                 GradientAvatar(
-                    name: widget.title,
-                    radius: 20,
-                    imageUrl: _avatar),
+                  name: widget.title,
+                  radius: 20,
+                  imageUrl: _avatar,
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: GestureDetector(
@@ -445,33 +555,38 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
                                 verified:
                                     widget.kind == 'direct' && otherVerified,
                                 style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600),
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
-                            if (widget.kind == 'direct')
-                              _adminVerifyButton(),
+                            if (widget.kind == 'direct') _adminVerifyButton(),
                           ],
                         ),
-                        Text(_subtitle(),
-                            style: TextStyle(
-                                fontSize: 12,
-                                color: otherStatus == 'online'
-                                    ? LuxeColors.online
-                                    : Colors.grey)),
+                        Text(
+                          _subtitle(),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: otherStatus == 'online'
+                                ? LuxeColors.online
+                                : Colors.grey,
+                          ),
+                        ),
                       ],
                     ),
                   ),
                 ),
                 if (widget.kind == 'direct') ...[
                   IconButton(
-                      tooltip: 'Аудиозвонок',
-                      icon: const Icon(Icons.call_rounded),
-                      onPressed: () => openCall(false)),
+                    tooltip: 'Аудиозвонок',
+                    icon: const Icon(Icons.call_rounded),
+                    onPressed: () => openCall(false),
+                  ),
                   IconButton(
-                      tooltip: 'Видеозвонок',
-                      icon: const Icon(Icons.videocam_rounded),
-                      onPressed: () => openCall(true)),
+                    tooltip: 'Видеозвонок',
+                    icon: const Icon(Icons.videocam_rounded),
+                    onPressed: () => openCall(true),
+                  ),
                 ] else ...[
                   IconButton(
                     tooltip: 'Настройки',
@@ -479,23 +594,26 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
                     onPressed: widget.onToggleInfo,
                   ),
                   IconButton(
-                      tooltip: 'Информация',
-                      icon: const Icon(Icons.info_outline_rounded),
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => GroupInfoScreen(
-                                  chatId: widget.chatId,
-                                  onChanged: () {
-                                    _init();
-                                    widget.onChanged();
-                                  })),
-                        ).then((_) {
-                          _init();
-                          widget.onChanged();
-                        });
-                      }),
+                    tooltip: 'Информация',
+                    icon: const Icon(Icons.info_outline_rounded),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => GroupInfoScreen(
+                            chatId: widget.chatId,
+                            onChanged: () {
+                              _init();
+                              widget.onChanged();
+                            },
+                          ),
+                        ),
+                      ).then((_) {
+                        _init();
+                        widget.onChanged();
+                      });
+                    },
+                  ),
                 ],
               ],
             ),
@@ -507,18 +625,21 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
               color: dark ? LuxeColors.darkCard : Colors.white,
               child: Row(
                 children: [
-                  Icon(isChannel
-                      ? Icons.campaign_outlined
-                      : Icons.info_outline_rounded,
-                      size: 15,
-                      color: LuxeColors.neonBlue),
+                  Icon(
+                    isChannel
+                        ? Icons.campaign_outlined
+                        : Icons.info_outline_rounded,
+                    size: 15,
+                    color: LuxeColors.neonBlue,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       _description!,
                       style: TextStyle(
-                          fontSize: 13,
-                          color: dark ? Colors.white70 : Colors.black87),
+                        fontSize: 13,
+                        color: dark ? Colors.white70 : Colors.black87,
+                      ),
                     ),
                   ),
                 ],
@@ -532,37 +653,49 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
                   : (dark ? LuxeColors.darkBg : LuxeColors.lightBg),
               child: LayoutBuilder(
                 builder: (context, box) => ListView.builder(
-                controller: scroll,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                itemCount: msgs.length,
-                itemBuilder: (context, i) {
-                  final m = msgs[i];
-                  final mine = m['sender_id'] == myId;
+                  controller: scroll,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  itemCount: msgs.length,
+                  itemBuilder: (context, i) {
+                    final m = msgs[i];
+                    final mine = m['sender_id'] == myId;
 
-                  // Разделитель даты перед каждым новым днём
-                  final prev = i == 0 ? null : msgs[i - 1];
-                  final newDay = prev == null ||
-                      !_sameDay(_dateOf(prev), _dateOf(m));
+                    // Разделитель даты перед каждым новым днём
+                    final prev = i == 0 ? null : msgs[i - 1];
+                    final newDay =
+                        prev == null || !_sameDay(_dateOf(prev), _dateOf(m));
 
-                  Widget bubble = isChannel && !mine
-                      ? _channelPost(context, m)
-                      : Align(
-                          alignment: mine
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: _bubble(context, m, mine, dark,
-                              box.maxWidth),
-                        );
+                    Widget bubble = isChannel && !mine
+                        ? _channelPost(context, m)
+                        : Align(
+                            alignment: mine
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                            child: _bubble(
+                              context,
+                              m,
+                              mine,
+                              dark,
+                              box.maxWidth,
+                            ),
+                          );
+                    // Долгое нажатие открывает меню на любом сообщении:
+                    // копировать, сохранить вложение, удалить у себя/у всех.
+                    bubble = GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onLongPress: () => _messageMenu(m, mine),
+                      child: bubble,
+                    );
 
-                  if (!newDay) return bubble;
-                  return Column(
-                    children: [
-                      _dateSeparator(_dateOf(m), dark),
-                      bubble,
-                    ],
-                  );
-                },
-              ),
+                    if (!newDay) return bubble;
+                    return Column(
+                      children: [_dateSeparator(_dateOf(m), dark), bubble],
+                    );
+                  },
+                ),
               ),
             ),
           ),
@@ -643,9 +776,9 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
       widget.onChanged();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(giving
-              ? '${widget.title} теперь верифицирован'
-              : 'Галочка снята'),
+          content: Text(
+            giving ? '${widget.title} теперь верифицирован' : 'Галочка снята',
+          ),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -655,8 +788,7 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
           .toString()
           .replaceAll('Exception: ', '')
           .replaceAll('Bad state: ', '');
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(msg)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     }
   }
 
@@ -668,8 +800,13 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     return 'был(а) недавно';
   }
 
-  Widget _bubble(BuildContext context, Map<String, dynamic> m, bool mine,
-      bool dark, double available) {
+  Widget _bubble(
+    BuildContext context,
+    Map<String, dynamic> m,
+    bool mine,
+    bool dark,
+    double available,
+  ) {
     final status = m['status'] as String?;
     final failed = status == 'failed';
     final type = m['type'] as String? ?? 'text';
@@ -680,11 +817,15 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 3),
         child: Column(
-          crossAxisAlignment:
-              mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: mine
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           children: [
             StickerView(
-                url: url, kind: MediaService.stickerKind(url), size: 132),
+              url: url,
+              kind: MediaService.stickerKind(url),
+              size: 132,
+            ),
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -704,8 +845,8 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     }
     // Пока файл грузится на сервер, ссылки ещё нет — рисуем заглушку,
     // а не падаем на url! (раньше из-за этого весь список сообщений исчезал)
-    final uploading = (type == 'image' || type == 'video') &&
-        (url == null || url.isEmpty);
+    final uploading =
+        (type == 'image' || type == 'video') && (url == null || url.isEmpty);
     // У голосового и кружка своя полоса внутри: показывать ещё и текст
     // «Голосовое сообщение» было бы мусором в чате.
     final hasMedia =
@@ -717,8 +858,8 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     final bg = failed
         ? (dark ? const Color(0xFF5C2B2B) : const Color(0xFFFBE3E4))
         : mine
-            ? null
-            : (dark ? LuxeColors.bubbleIn : LuxeColors.bubbleInLight);
+        ? null
+        : (dark ? LuxeColors.bubbleIn : LuxeColors.bubbleInLight);
     final fg = gradientBubble || dark ? Colors.white : Colors.black87;
     // Ширина считается от реальной ширины колонки, а не от ширины окна:
     // в трёхколоночном режиме колонка чата намного уже окна
@@ -781,10 +922,14 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
             _fileAttachment(context, m, fg),
           // Подпись: для медиа показываем только если она не совпадает с именем файла
           if (!hasMedia ||
-              (type != 'file' && caption.isNotEmpty && caption != fileName)) ...[
+              (type != 'file' &&
+                  caption.isNotEmpty &&
+                  caption != fileName)) ...[
             if (hasMedia) const SizedBox(height: 5),
-            Text(caption,
-                style: TextStyle(fontSize: 15, height: 1.25, color: fg)),
+            Text(
+              caption,
+              style: TextStyle(fontSize: 15, height: 1.25, color: fg),
+            ),
           ],
           const SizedBox(height: 2),
           Row(
@@ -794,8 +939,9 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
               Text(
                 _time(m),
                 style: TextStyle(
-                    fontSize: 10,
-                    color: mine || dark ? Colors.white54 : Colors.black45),
+                  fontSize: 10,
+                  color: mine || dark ? Colors.white54 : Colors.black45,
+                ),
               ),
               if (mine) Ticks(status: status),
             ],
@@ -806,8 +952,7 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
   }
 
   /// Заглушка на время загрузки файла на сервер.
-  Widget _uploadPlaceholder(
-      double maxW, bool failed, bool dark, String name) {
+  Widget _uploadPlaceholder(double maxW, bool failed, bool dark, String name) {
     return Container(
       height: 150,
       width: maxW - 6,
@@ -820,14 +965,20 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
           ? Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.error_outline_rounded,
-                    size: 18, color: LuxeColors.danger),
+                Icon(
+                  Icons.error_outline_rounded,
+                  size: 18,
+                  color: LuxeColors.danger,
+                ),
                 const SizedBox(width: 6),
                 Flexible(
-                  child: Text('Не удалось отправить',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: dark ? Colors.white70 : Colors.black54)),
+                  child: Text(
+                    'Не удалось отправить',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: dark ? Colors.white70 : Colors.black54,
+                    ),
+                  ),
                 ),
               ],
             )
@@ -840,10 +991,13 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
                 const SizedBox(height: 8),
-                Text('Загрузка…',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: dark ? Colors.white54 : Colors.black45)),
+                Text(
+                  'Загрузка…',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: dark ? Colors.white54 : Colors.black45,
+                  ),
+                ),
               ],
             ),
     );
@@ -851,15 +1005,20 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
 
   /// Фото — показывается сразу картинкой, тап открывает во весь экран,
   /// долгий тап даёт «Сохранить».
-  Widget _imageAttachment(BuildContext context, Map<String, dynamic> m,
-      String url, bool mine, bool dark, double maxW) {
+  Widget _imageAttachment(
+    BuildContext context,
+    Map<String, dynamic> m,
+    String url,
+    bool mine,
+    bool dark,
+    double maxW,
+  ) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(13),
       child: Stack(
         children: [
           GestureDetector(
             onTap: () => _openImage(context, url),
-            onLongPress: () => _saveFile(context, url, m),
             child: NetImage(
               url,
               width: maxW - 6,
@@ -878,12 +1037,17 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
   }
 
   /// Видео — карточка с превью-заглушкой и кнопкой открытия.
-  Widget _videoAttachment(BuildContext context, Map<String, dynamic> m,
-      String url, String name, bool dark, double maxW) {
+  Widget _videoAttachment(
+    BuildContext context,
+    Map<String, dynamic> m,
+    String url,
+    String name,
+    bool dark,
+    double maxW,
+  ) {
     final fg = dark ? Colors.white : Colors.black87;
     return GestureDetector(
       onTap: () => _openUrl(url),
-      onLongPress: () => _saveFile(context, url, m),
       child: Container(
         height: 150,
         width: maxW - 6,
@@ -901,14 +1065,19 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
                 shape: BoxShape.circle,
                 color: Colors.white24,
               ),
-              child: const Icon(Icons.play_arrow_rounded,
-                  color: Colors.white, size: 34),
+              child: const Icon(
+                Icons.play_arrow_rounded,
+                color: Colors.white,
+                size: 34,
+              ),
             ),
             const SizedBox(height: 8),
-            Text(name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: fg.withValues(alpha: 0.9), fontSize: 12)),
+            Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: fg.withValues(alpha: 0.9), fontSize: 12),
+            ),
           ],
         ),
       ),
@@ -917,7 +1086,11 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
 
   /// Кнопка «скачать» поверх изображения.
   Widget _downloadChip(
-      BuildContext context, String url, Map<String, dynamic> m, bool dark) {
+    BuildContext context,
+    String url,
+    Map<String, dynamic> m,
+    bool dark,
+  ) {
     return GestureDetector(
       onTap: () => _saveFile(context, url, m),
       child: Container(
@@ -926,15 +1099,22 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
           shape: BoxShape.circle,
           color: Colors.black.withValues(alpha: 0.45),
         ),
-        child: const Icon(Icons.download_rounded, color: Colors.white, size: 18),
+        child: const Icon(
+          Icons.download_rounded,
+          color: Colors.white,
+          size: 18,
+        ),
       ),
     );
   }
 
   /// Карточка файла: иконка, имя, размер, кнопка скачивания.
   Widget _fileAttachment(
-      BuildContext context, Map<String, dynamic> m, Color fg) {
-    final url = m['file_url'] as String?;
+    BuildContext context,
+    Map<String, dynamic> m,
+    Color fg,
+  ) {
+    final url = MediaService.fixUrl(m['file_url'] as String?);
     final name = (m['file_name'] ?? m['content'] ?? 'Файл') as String;
     final size = (m['file_size'] ?? 0) as int;
 
@@ -956,24 +1136,36 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
         Flexible(
           child: GestureDetector(
             onTap: url == null ? null : () => _openUrl(url),
-            onLongPress: url == null ? null : () => _saveFile(context, url, m),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w500, color: fg)),
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: fg,
+                  ),
+                ),
                 if (size > 0)
-                  Text(MediaService.humanSize(size),
-                      style: TextStyle(
-                          fontSize: 11, color: fg.withValues(alpha: 0.65)))
+                  Text(
+                    MediaService.humanSize(size),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: fg.withValues(alpha: 0.65),
+                    ),
+                  )
                 else
-                  Text('Нажмите, чтобы открыть',
-                      style: TextStyle(
-                          fontSize: 11, color: fg.withValues(alpha: 0.65))),
+                  Text(
+                    'Нажмите, чтобы открыть',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: fg.withValues(alpha: 0.65),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -987,7 +1179,10 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
   }
 
   Widget _downloadButton(
-      BuildContext context, String url, Map<String, dynamic> m) {
+    BuildContext context,
+    String url,
+    Map<String, dynamic> m,
+  ) {
     final fg = Theme.of(context).brightness == Brightness.dark
         ? Colors.white
         : Colors.black87;
@@ -1032,10 +1227,16 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
 
   /// Скачать файл на устройство.
   Future<void> _saveFile(
-      BuildContext context, String url, Map<String, dynamic> m) async {
+    BuildContext context,
+    String url,
+    Map<String, dynamic> m,
+  ) async {
     final name = (m['file_name'] ?? m['content'] ?? 'file') as String;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Скачиваем...'), duration: Duration(seconds: 1)),
+      const SnackBar(
+        content: Text('Скачиваем...'),
+        duration: Duration(seconds: 1),
+      ),
     );
     try {
       final path = await MediaService.download(url, name);
@@ -1049,16 +1250,27 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     } catch (e) {
       debugPrint('Не удалось скачать файл: $e');
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Не удалось скачать: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Не удалось скачать: $e')));
     }
   }
 
   /// Открыть файл системным приложением.
   Future<void> _openUrl(String url) async {
     final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    var ok = false;
+    try {
+      ok =
+          await canLaunchUrl(uri) &&
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (e) {
+      debugPrint('Открыть файл не удалось: $e');
+    }
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Не удалось открыть файл')));
     }
   }
 
@@ -1126,14 +1338,24 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
     final day = DateTime(dt.year, dt.month, dt.day);
     final diff = today.difference(day).inDays;
     const months = [
-      'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
-      'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+      'января',
+      'февраля',
+      'марта',
+      'апреля',
+      'мая',
+      'июня',
+      'июля',
+      'августа',
+      'сентября',
+      'октября',
+      'ноября',
+      'декабря',
     ];
     final label = switch (diff) {
       0 => 'Сегодня',
       1 => 'Вчера',
       _ =>
-          '${day.day} ${months[day.month - 1]}${day.year != now.year ? ' ${day.year}' : ''}',
+        '${day.day} ${months[day.month - 1]}${day.year != now.year ? ' ${day.year}' : ''}',
     };
     return Center(
       child: Container(
@@ -1145,11 +1367,14 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
               : Colors.white.withValues(alpha: 0.75),
           borderRadius: BorderRadius.circular(12),
         ),
-        child: Text(label,
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: dark ? Colors.white70 : Colors.black54)),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: dark ? Colors.white70 : Colors.black54,
+          ),
+        ),
       ),
     );
   }
@@ -1181,36 +1406,49 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
                 decoration: const BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: const LinearGradient(
-                      colors: [LuxeColors.neonBlue, LuxeColors.neonPurple]),
+                    colors: [LuxeColors.neonBlue, LuxeColors.neonPurple],
+                  ),
                 ),
-                child: const Icon(Icons.campaign_rounded,
-                    color: Colors.white, size: 15),
+                child: const Icon(
+                  Icons.campaign_rounded,
+                  color: Colors.white,
+                  size: 15,
+                ),
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(widget.title,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: LuxeColors.neonBlue,
-                        fontSize: 14)),
+                child: Text(
+                  widget.title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: LuxeColors.neonBlue,
+                    fontSize: 14,
+                  ),
+                ),
               ),
               Text(
                 timeago.format(
-                    DateTime.parse(m['created_at']).toLocal(),
-                    locale: 'ru'),
+                  DateTime.parse(m['created_at']).toLocal(),
+                  locale: 'ru',
+                ),
                 style: TextStyle(
-                    fontSize: 11,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  fontSize: 11,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
             ],
           ),
           const SizedBox(height: 8),
           Text(
-              m['type'] == 'file' ? (m['content'] ?? 'Файл') : (m['content'] ?? ''),
-              style: TextStyle(
-                  fontSize: 15,
-                  height: 1.35,
-                  color: dark ? Colors.white : Colors.black87)),
+            m['type'] == 'file'
+                ? (m['content'] ?? 'Файл')
+                : (m['content'] ?? ''),
+            style: TextStyle(
+              fontSize: 15,
+              height: 1.35,
+              color: dark ? Colors.white : Colors.black87,
+            ),
+          ),
         ],
       ),
     );
@@ -1231,15 +1469,15 @@ class _SplitChatScreenState extends State<SplitChatScreen> {
         setState(() {});
       },
       onOpenAllStickers: () {
-        Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => const StickersScreen()));
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const StickersScreen()));
       },
       onAttachPhoto: _attachPhoto,
       onAttachVideo: _attachVideo,
       onAttachFile: _attachFile,
     );
   }
-
 
   Widget _subscribeRow() {
     return Center(

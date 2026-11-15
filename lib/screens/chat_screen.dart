@@ -10,6 +10,7 @@ import '../services/media_service.dart';
 import '../services/sticker_service.dart';
 import '../theme/luxe_theme.dart';
 import '../widgets/luxe_widgets.dart';
+import '../widgets/message_actions.dart';
 import '../widgets/sticker_view.dart';
 import '../widgets/video_circle.dart';
 import '../widgets/voice_message.dart';
@@ -23,11 +24,12 @@ class ChatScreen extends StatefulWidget {
   final String chatId;
   final String title;
   final Map<String, dynamic>? incomingOffer;
-  const ChatScreen(
-      {super.key,
-      required this.chatId,
-      required this.title,
-      this.incomingOffer});
+  const ChatScreen({
+    super.key,
+    required this.chatId,
+    required this.title,
+    this.incomingOffer,
+  });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -52,19 +54,25 @@ class _ChatScreenState extends State<ChatScreen> {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-              builder: (_) => CallScreen(
-                    chatId: widget.chatId,
-                    calleeId: '',
-                    title: widget.title,
-                    incomingOffer: widget.incomingOffer,
-                    video: true,
-                  )),
+            builder: (_) => CallScreen(
+              chatId: widget.chatId,
+              calleeId: '',
+              title: widget.title,
+              incomingOffer: widget.incomingOffer,
+              video: true,
+            ),
+          ),
         );
       });
     }
   }
 
   Future<void> _init() async {
+    // Повторный вход (например, после экрана информации о группе) не
+    // должен оставлять вторую подписку — иначе сообщения приходят дважды.
+    await msgCh?.unsubscribe();
+    msgCh = null;
+
     msgs = await ChatService.messages(widget.chatId);
     otherId = await ChatService.otherUserId(widget.chatId);
     if (otherId.isNotEmpty) {
@@ -91,17 +99,65 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) setState(() {});
     _scrollDown();
     await ChatService.markAsRead(widget.chatId);
-    msgCh = supabase.channel('msg:${widget.chatId}');
+
+    final chatId = widget.chatId;
+    msgCh = supabase.channel(
+      'msg:$chatId:${DateTime.now().microsecondsSinceEpoch}',
+    );
     msgCh!
         .onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
           table: 'messages',
           callback: (payload) {
-            if (payload.newRecord['chat_id'] == widget.chatId) {
-              setState(() => msgs.add(payload.newRecord));
-              _scrollDown();
-            }
+            if (payload.newRecord['chat_id'] != chatId) return;
+            if (!mounted) return;
+            final id = payload.newRecord['id'];
+            if (msgs.any((m) => m['id'] == id)) return;
+            setState(
+              () => msgs.add(Map<String, dynamic>.from(payload.newRecord)),
+            );
+            _scrollDown();
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'messages',
+          callback: (payload) {
+            if (payload.newRecord['chat_id'] != chatId) return;
+            if (!mounted) return;
+            final id = payload.newRecord['id'];
+            final i = msgs.indexWhere((m) => m['id'] == id);
+            if (i == -1) return;
+            setState(
+              () => msgs[i] = Map<String, dynamic>.from(payload.newRecord),
+            );
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.delete,
+          schema: 'public',
+          table: 'messages',
+          callback: (payload) {
+            if (!mounted) return;
+            final id = payload.oldRecord['id'];
+            if (id == null) return;
+            setState(() => msgs.removeWhere((m) => m['id'] == id));
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'message_hides',
+          callback: (payload) {
+            final row = payload.newRecord;
+            if (row['chat_id'] != chatId) return;
+            if (row['user_id'] != AuthService.myId) return;
+            if (!mounted) return;
+            setState(
+              () => msgs.removeWhere((m) => m['id'] == row['message_id']),
+            );
           },
         )
         .subscribe();
@@ -110,9 +166,11 @@ class _ChatScreenState extends State<ChatScreen> {
   void _scrollDown() {
     Future.delayed(const Duration(milliseconds: 200), () {
       if (scroll.hasClients) {
-        scroll.animateTo(scroll.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut);
+        scroll.animateTo(
+          scroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
       }
     });
   }
@@ -135,23 +193,37 @@ class _ChatScreenState extends State<ChatScreen> {
     final file = await MediaService.pickAnyFile();
     if (file == null) return;
     final url = await MediaService.uploadFile(file);
-    await ChatService.sendFile(widget.chatId, url, file.name);
+    await ChatService.sendFile(widget.chatId, url, file.name, size: file.size);
   }
 
   Future<void> _attachPhoto() async {
     final f = await MediaService.pickPhoto();
     if (f == null) return;
     final name = f.name.isEmpty ? 'photo.jpg' : f.name;
+    final size = await f.length();
     final url = await MediaService.uploadPhoto(f);
-    await ChatService.sendFile(widget.chatId, url, name, type: 'image');
+    await ChatService.sendFile(
+      widget.chatId,
+      url,
+      name,
+      type: 'image',
+      size: size,
+    );
   }
 
   Future<void> _attachVideo() async {
     final f = await MediaService.pickVideo();
     if (f == null) return;
     final name = f.name.isEmpty ? 'video.mp4' : f.name;
+    final size = await f.length();
     final url = await MediaService.uploadVideo(f);
-    await ChatService.sendFile(widget.chatId, url, name, type: 'video');
+    await ChatService.sendFile(
+      widget.chatId,
+      url,
+      name,
+      type: 'video',
+      size: size,
+    );
   }
 
   /// Отправить записанное голосовое.
@@ -198,18 +270,23 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void openCall(bool video) {
     if (otherId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Это групповой чат, звонки только в личке')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Это групповой чат, звонки только в личке'),
+        ),
+      );
       return;
     }
     Navigator.push(
       context,
       MaterialPageRoute(
-          builder: (_) => CallScreen(
-              chatId: widget.chatId,
-              calleeId: otherId,
-              title: widget.title,
-              video: video)),
+        builder: (_) => CallScreen(
+          chatId: widget.chatId,
+          calleeId: otherId,
+          title: widget.title,
+          video: video,
+        ),
+      ),
     );
   }
 
@@ -235,12 +312,14 @@ class _ChatScreenState extends State<ChatScreen> {
         title: GestureDetector(
           onTap: kind == 'group'
               ? () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => GroupInfoScreen(
-                            chatId: widget.chatId,
-                            onChanged: () => _init())),
-                  ).then((_) => _init())
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => GroupInfoScreen(
+                      chatId: widget.chatId,
+                      onChanged: () => _init(),
+                    ),
+                  ),
+                ).then((_) => _init())
               : null,
           child: Row(
             children: [
@@ -251,26 +330,35 @@ class _ChatScreenState extends State<ChatScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(widget.title,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w600)),
+                    Text(
+                      widget.title,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                     if (kind == 'group')
-                      Text('$memberCount ${_plural(memberCount)}',
-                          style: TextStyle(
-                              fontSize: 12, color: scheme.onSurfaceVariant))
+                      Text(
+                        '$memberCount ${_plural(memberCount)}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      )
                     else if (otherStatus.isNotEmpty)
                       Text(
                         otherStatus == 'online'
                             ? 'в сети'
                             : otherStatus == 'busy'
-                                ? 'занят(а)'
-                                : 'был(а) недавно',
+                            ? 'занят(а)'
+                            : 'был(а) недавно',
                         style: TextStyle(
-                            fontSize: 12,
-                            color: otherStatus == 'online'
-                                ? LuxeColors.online
-                                : scheme.onSurfaceVariant),
+                          fontSize: 12,
+                          color: otherStatus == 'online'
+                              ? LuxeColors.online
+                              : scheme.onSurfaceVariant,
+                        ),
                       ),
                   ],
                 ),
@@ -280,13 +368,15 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: [
           IconButton(
-              tooltip: 'Аудиозвонок',
-              icon: const Icon(Icons.call_rounded),
-              onPressed: () => openCall(false)),
+            tooltip: 'Аудиозвонок',
+            icon: const Icon(Icons.call_rounded),
+            onPressed: () => openCall(false),
+          ),
           IconButton(
-              tooltip: 'Видеозвонок',
-              icon: const Icon(Icons.videocam_rounded),
-              onPressed: () => openCall(true)),
+            tooltip: 'Видеозвонок',
+            icon: const Icon(Icons.videocam_rounded),
+            onPressed: () => openCall(true),
+          ),
           const SizedBox(width: 4),
         ],
       ),
@@ -297,12 +387,17 @@ class _ChatScreenState extends State<ChatScreen> {
               color: dark ? LuxeColors.deepDark : const Color(0xFFE7EBF0),
               child: msgs.isEmpty
                   ? Center(
-                      child: Text('Сообщений пока нет',
-                          style: TextStyle(color: scheme.onSurfaceVariant)))
+                      child: Text(
+                        'Сообщений пока нет',
+                        style: TextStyle(color: scheme.onSurfaceVariant),
+                      ),
+                    )
                   : ListView.builder(
                       controller: scroll,
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 12),
+                        horizontal: 12,
+                        vertical: 12,
+                      ),
                       itemCount: msgs.length,
                       itemBuilder: (context, i) {
                         final m = msgs[i];
@@ -311,8 +406,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
                         var showDate = true;
                         if (i > 0) {
-                          final prev =
-                              DateTime.parse(msgs[i - 1]['created_at']).toLocal();
+                          final prev = DateTime.parse(
+                            msgs[i - 1]['created_at'],
+                          ).toLocal();
                           if (date.year == prev.year &&
                               date.month == prev.month &&
                               date.day == prev.day) {
@@ -322,12 +418,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
                         return Column(
                           children: [
-                            if (showDate) _DateSeparator(date: date, dark: dark),
+                            if (showDate)
+                              _DateSeparator(date: date, dark: dark),
                             _MessageBubble(
                               message: m,
                               isMine: isMine,
                               dark: dark,
-                              onLongPress: isMine ? () => _confirmDelete(m) : null,
+                              onLongPress: () => _messageMenu(m, isMine),
                               onVoicePlayed: () => _markVoicePlayed(m),
                             ),
                           ],
@@ -342,26 +439,43 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  // Подтверждение удаления своего сообщения (долгое нажатие).
-  Future<void> _confirmDelete(Map<String, dynamic> m) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Удалить сообщение?'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Отмена')),
-          TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child:
-                  const Text('Удалить', style: TextStyle(color: Colors.red))),
-        ],
-      ),
-    );
-    if (confirm == true && m['id'] != null) {
-      await ChatService.deleteMessage(m['id'] as String);
-      setState(() => msgs.removeWhere((msg) => msg['id'] == m['id']));
+  // Меню сообщения по долгому нажатию.
+  Future<void> _messageMenu(Map<String, dynamic> m, bool isMine) async {
+    final id = m['id'] as String?;
+    if (id == null) return;
+    final pending = id.startsWith('pending-');
+
+    final action = await showMessageActions(context, message: m, mine: isMine);
+    if (!mounted || action == null) return;
+
+    switch (action) {
+      case MessageAction.copy:
+      case MessageAction.save:
+        break;
+      case MessageAction.deleteForMe:
+        try {
+          if (!pending) {
+            await ChatService.hideForMe(id, widget.chatId);
+          }
+          if (mounted) {
+            setState(() => msgs.removeWhere((msg) => msg['id'] == id));
+          }
+        } catch (e) {
+          if (mounted) _toast('Не удалось удалить у себя: $e');
+        }
+        break;
+      case MessageAction.deleteForAll:
+        final ok = await confirmDeleteForAll(context);
+        if (!ok || !mounted) return;
+        try {
+          await ChatService.deleteForEveryone(id);
+          if (mounted) {
+            setState(() => msgs.removeWhere((msg) => msg['id'] == id));
+          }
+        } catch (e) {
+          if (mounted) _toast('Не удалось удалить у всех: $e');
+        }
+        break;
     }
   }
 
@@ -392,8 +506,9 @@ class _ChatScreenState extends State<ChatScreen> {
             if (ok && mounted) setState(() {});
           },
           onOpenAllStickers: () {
-            Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const StickersScreen()));
+            Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const StickersScreen()));
           },
           onAttachPhoto: _attachPhoto,
           onAttachVideo: _attachVideo,
@@ -413,8 +528,18 @@ class _DateSeparator extends StatelessWidget {
   const _DateSeparator({required this.date, required this.dark});
 
   static const _months = [
-    'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
-    'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+    'января',
+    'февраля',
+    'марта',
+    'апреля',
+    'мая',
+    'июня',
+    'июля',
+    'августа',
+    'сентября',
+    'октября',
+    'ноября',
+    'декабря',
   ];
 
   static bool _sameDay(DateTime a, DateTime b) =>
@@ -490,7 +615,10 @@ class _MessageBubble extends StatelessWidget {
     if (type == 'sticker' && hasFile) {
       // Стикер показываем без пузыря, как в Telegram.
       bubble = StickerView(
-          url: fileUrl, kind: MediaService.stickerKind(fileUrl), size: 124);
+        url: fileUrl,
+        kind: MediaService.stickerKind(fileUrl),
+        size: 124,
+      );
     } else {
       bubble = Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -522,20 +650,25 @@ class _MessageBubble extends StatelessWidget {
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
           constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.75),
+            maxWidth: MediaQuery.of(context).size.width * 0.75,
+          ),
           child: Column(
-            crossAxisAlignment:
-                isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            crossAxisAlignment: isMine
+                ? CrossAxisAlignment.end
+                : CrossAxisAlignment.start,
             children: [
               bubble,
               const SizedBox(height: 2),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(time,
-                      style: TextStyle(
-                          fontSize: 10,
-                          color: dark ? Colors.white38 : Colors.black38)),
+                  Text(
+                    time,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: dark ? Colors.white38 : Colors.black38,
+                    ),
+                  ),
                   if (isMine) ...[
                     const SizedBox(width: 3),
                     Icon(
@@ -558,7 +691,11 @@ class _MessageBubble extends StatelessWidget {
   }
 
   Widget _content(
-      BuildContext context, String? type, String? content, String? fileUrl) {
+    BuildContext context,
+    String? type,
+    String? content,
+    String? fileUrl,
+  ) {
     if (type == 'voice' && fileUrl != null && fileUrl.isNotEmpty) {
       return VoiceMessage(
         url: fileUrl,
@@ -587,7 +724,8 @@ class _MessageBubble extends StatelessWidget {
             await launchUrl(uri, mode: LaunchMode.externalApplication);
           } else if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Не удалось открыть: $fileUrl')));
+              SnackBar(content: Text('Не удалось открыть: $fileUrl')),
+            );
           }
         },
         child: Column(
@@ -596,28 +734,34 @@ class _MessageBubble extends StatelessWidget {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.insert_drive_file_rounded,
-                    size: 18,
-                    color: isMine ? Colors.white70 : LuxeColors.neonBlue),
+                Icon(
+                  Icons.insert_drive_file_rounded,
+                  size: 18,
+                  color: isMine ? Colors.white70 : LuxeColors.neonBlue,
+                ),
                 const SizedBox(width: 6),
                 Flexible(
                   child: Text(
                     content ?? 'Файл',
                     style: TextStyle(
-                        color: isMine || dark ? Colors.white : Colors.black87,
-                        fontSize: 15),
+                      color: isMine || dark ? Colors.white : Colors.black87,
+                      fontSize: 15,
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 4),
-            Text('Открыть файл →',
-                style: TextStyle(
-                    fontSize: 12,
-                    color: isMine
-                        ? Colors.white70
-                        : (dark ? Colors.white60 : Colors.black54))),
+            Text(
+              'Открыть файл →',
+              style: TextStyle(
+                fontSize: 12,
+                color: isMine
+                    ? Colors.white70
+                    : (dark ? Colors.white60 : Colors.black54),
+              ),
+            ),
           ],
         ),
       );
@@ -626,7 +770,9 @@ class _MessageBubble extends StatelessWidget {
     return Text(
       content ?? '',
       style: TextStyle(
-          color: isMine || dark ? Colors.white : Colors.black87, fontSize: 15),
+        color: isMine || dark ? Colors.white : Colors.black87,
+        fontSize: 15,
+      ),
     );
   }
 }
